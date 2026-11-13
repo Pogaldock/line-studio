@@ -11,7 +11,11 @@ for i in sorted(os.listdir(REF)):
     a, b = np.load(f'{r}/path_d1.npy'), np.load(f'{out}/path_d1.npy')
     same = a.shape == b.shape and np.array_equal(a, b) and json.load(open(f'{r}/kinds_d1.json')) == json.load(open(f'{out}/kinds_d1.json'))
     w = os.path.exists(f'{out}/widths_d1.npy') and np.array_equal(np.load(f'{r}/widths_d1.npy'), np.load(f'{out}/widths_d1.npy'))
-    note = '' if same else (f'max point offset {np.abs(a - b).max() * 900 / 500:.2f}px' if a.shape == b.shape else f'{len(a)} vs {len(b)} points')
+    wa, wb = np.load(f'{r}/widths_d1.npy'), np.load(f'{out}/widths_d1.npy') if os.path.exists(f'{out}/widths_d1.npy') else None
+    note = '' if same else (f'max point offset {np.abs(a - b).max() * 900 / 500:.6f}px' if a.shape == b.shape else f'{len(a)} vs {len(b)} points')
+    if not w and wb is not None and wa.shape == wb.shape: note += f', max width change {100 * np.abs(wa - wb).max() / max(wa.max(), 1e-9):.4f}%'
+    try: note += ' | cpu: ' + [l.split(':', 1)[1].strip() for l in open('/proc/cpuinfo') if l.startswith('model name')][0]
+    except Exception: pass
     print(f'{i}: {time.time() - t:5.1f} s  path {"IDENTICAL" if same else "DIFFERENT " + note}  widths {"same" if w else "diff"}', flush=True)
     bad += not (same and w)
 print('ALL IDENTICAL' if not bad else f'{bad} DIFFER'); sys.exit(1 if bad else 0)
