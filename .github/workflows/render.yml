@@ -15,13 +15,13 @@ jobs:
   render:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env: { GH_TOKEN: "${{ github.token }}", TAG: "job-${{ inputs.job }}" }
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}", TAG: "job-${{ inputs.job }}" }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { models: "false" }
       - name: get chosen drawing
-        run: gh release download "$TAG" -p "opt_${{ inputs.option }}.tgz" -D work
+        run: gh release download "$TAG" -p "opt_${{ inputs.option }}.tgz.enc" -D work
       - name: render video
         env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}" }
         run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --tag "$TAG"

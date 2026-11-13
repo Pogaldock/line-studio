@@ -1,4 +1,4 @@
-# Photo -> drawing options. Started by the phone page (symbiozefpv.com/admin/lines) through the site Worker:
+# Photo -> drawing options. Started by the phone page through the site Worker (admin only):
 # the photo is already attached to release job-<id>; stills, line data and progress.json go back to that release.
 # Planned time: setup 1 min (cached) / 4 min (first run), trace ~1-2 min on 2 cores. Limit 20 min.
 name: trace
@@ -13,15 +13,15 @@ jobs:
   trace:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env: { GH_TOKEN: "${{ github.token }}", TAG: "job-${{ inputs.job }}" }
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}", TAG: "job-${{ inputs.job }}" }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { models: "true" }
       - name: get photo
-        run: gh release download "$TAG" -p photo.jpg -D in
+        run: gh release download "$TAG" -p photo.jpg.enc -D in
       - name: trace options
-        run: ~/venv/bin/python engine/studio.py trace in/photo.jpg work --tag "$TAG"
+        run: ~/venv/bin/python engine/studio.py trace in/photo.jpg.enc work --tag "$TAG"
       - name: report failure
         if: failure()
         run: |

@@ -8,7 +8,7 @@ jobs:
   smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    env: { GH_TOKEN: "${{ github.token }}", TAG: "job-smoke-${{ github.run_id }}" }
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}", TAG: "job-smoke-${{ github.run_id }}" }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -17,9 +17,11 @@ jobs:
         continue-on-error: true
         run: ~/venv/bin/python tools/regress.py
       - name: test job release
-        run: gh release create "$TAG" tools/ref/p12838/photo.jpg --title "$TAG" --notes '{"name":"smoke test"}' --prerelease
+        run: |
+          ~/venv/bin/python -c "import sys; sys.path.insert(0,'engine'); import shutil, studio; shutil.copy('tools/ref/p12838/photo.jpg','photo.jpg'); studio.seal('photo.jpg')"
+          gh release create "$TAG" photo.jpg.enc --title "$TAG" --notes '{"name":"smoke test"}' --prerelease
       - name: trace
-        run: ~/venv/bin/python engine/studio.py trace tools/ref/p12838/photo.jpg work --tag "$TAG"
+        run: ~/venv/bin/python engine/studio.py trace photo.jpg.enc work --tag "$TAG"
       - name: render
         run: ~/venv/bin/python engine/studio.py render work a "doing lines again sorry" --tag "$TAG"
       - name: result

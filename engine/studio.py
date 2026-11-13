@@ -6,7 +6,10 @@
 # Options come from options.json next to this file (name + crop on/off + style settings), so new looks are a JSON edit.
 # With --tag, results go to that GitHub release as they finish (stills one by one, progress.json after every step),
 # which is what the phone page reads. Without --tag everything just stays in <workdir>.
-import sys, os, json, time, shutil, subprocess, tarfile, argparse, threading
+# Privacy (the repo is public): with LS_KEY set (base64, 32 bytes; a repo secret), the photo arrives encrypted
+# (photo.jpg.enc) and every still, drawing bundle and video is encrypted before upload: AES-256-GCM, file = 12-byte
+# nonce + ciphertext + tag. Only the phone page holds the same key to decrypt. progress.json stays plain (no image data).
+import sys, os, json, time, shutil, subprocess, tarfile, argparse, threading, base64
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np, cv2
 
@@ -29,6 +32,22 @@ class Progress:
     def opt(s, oid, **kw):
         for o in s.d['options']:
             if o['id'] == oid: o.update(kw)
+
+KEY = base64.b64decode(os.environ['LS_KEY']) if os.environ.get('LS_KEY') else None
+
+def seal(path):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    n = os.urandom(12); open(path + '.enc', 'wb').write(n + AESGCM(KEY).encrypt(n, open(path, 'rb').read(), None)); return path + '.enc'
+
+def unseal(src, dst):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    b = open(src, 'rb').read(); open(dst, 'wb').write(AESGCM(KEY).decrypt(b[:12], b[12:], None)); return dst
+
+def upload_private(tag, files):
+    # image data is only ever uploaded encrypted: with no key, nothing leaves the machine
+    if not tag: return
+    if not KEY: raise RuntimeError('LS_KEY is not set: refusing to upload image data unencrypted')
+    upload(tag, [seal(f) for f in files])
 
 def upload(tag, files):
     if not tag: return
@@ -65,7 +84,8 @@ def trace(args):
     log = open(os.path.join(work, 'trace.log'), 'a')
     try:
         pr.set(push=True, stage='reading the photo', pct=2)
-        photo = prepare(args.photo, work)
+        src_photo = unseal(args.photo, os.path.join(work, 'in.jpg')) if args.photo.endswith('.enc') else args.photo
+        photo = prepare(src_photo, work)
         pr.set(stage='finding the subject and cropping around it', pct=5)
         crop = os.path.join(work, 'crop.jpg')
         run([PY, 'autocrop.py', photo, crop], log=log)
@@ -85,7 +105,7 @@ def trace(args):
                 t.add(os.path.join(d, 'photo.jpg'), 'photo.jpg')
                 for f in os.listdir(os.path.join(d, 'line')):
                     if f.endswith(('_d1.npy', '_d1.json')): t.add(os.path.join(d, 'line', f), 'line/' + f)
-            upload(args.tag, [jpg, tgz])
+            upload_private(args.tag, [jpg, tgz])
             pr.opt(oid, state='done', pct=100)
             n_done = sum(x['state'] == 'done' for x in pr.d['options'])
             pr.set(push=True, stage=f'{n_done} of {len(opts)} options ready', pct=int(15 + 85 * n_done / len(opts)))
@@ -108,7 +128,9 @@ def render(args):
     d = os.path.join(work, f'render_{oid}'); os.makedirs(d, exist_ok=True); log = open(os.path.join(work, 'render.log'), 'a')
     try:
         pr.set(push=True, stage='unpacking the chosen drawing', pct=3)
-        with tarfile.open(os.path.join(work, f'opt_{oid}.tgz')) as t: t.extractall(d, filter='data')
+        tgz = os.path.join(work, f'opt_{oid}.tgz')
+        if not os.path.exists(tgz) and os.path.exists(tgz + '.enc'): unseal(tgz + '.enc', tgz)
+        with tarfile.open(tgz) as t: t.extractall(d, filter='data')
         final = os.path.join(work, f'video_{oid}.mp4')
         pr.set(stage='drawing the video frames', pct=8)
         state = {}
@@ -126,7 +148,7 @@ def render(args):
         run([PY, 'make916.py', os.path.join(d, 'photo.jpg'), os.path.join(d, 'line'), final, str(args.seconds)],
             env=dict(NO916='1', HUMANIZE='1', HU_ARGS=HU_ARGS, NOIPAD='1', CAPTION_PNG=capf), log=log, on_line=on_line)
         pr.set(stage='uploading the video', pct=96)
-        upload(args.tag, [final])
+        upload_private(args.tag, [final])
         pr.set(push=True, stage='video ready', pct=100, done=True, video=os.path.basename(final))
     except Exception as e:
         pr.set(push=True, stage='failed', error=str(e)[-1500:], done=True); raise
