@@ -344,7 +344,7 @@ def render_chunk(job):
             y0c, y1c = CAP_Y; a_ = CAP[y0c:y1c, :, 3:4].astype(np.float32) / 255
             fr[y0c:y1c] = (fr[y0c:y1c] * (1 - a_) + CAP[y0c:y1c, :, :3] * a_).astype(np.uint8)
         ff.stdin.write(fr.tobytes())
-        if (f - f0) % 300 == 0: log(f'  chunk {ci}: frame {f - f0}/{f1 - f0}')
+        if (f - f0) % 45 == 0: log(f'  chunk {ci}: frame {f - f0}/{f1 - f0}')   # every 1.5 s of video: the progress bar reads these
     ff.stdin.close(); ff.wait()
     return path
 

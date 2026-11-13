@@ -1,7 +1,7 @@
 # Photo -> drawing options. Started by the phone page through the site Worker (admin only):
 # the photo is already attached to release job-<id>; stills, line data and progress.json go back to that release.
-# Planned time: setup ~1 min, trace ~1 min (4 cores). Then every option is pre-rendered on its own runner in parallel
-# (light setup ~15 s + ~40 s), so the video step after a pick is only the caption pass. Limits 20 / 15 min.
+# Planned time: setup ~15 s (cached), trace ~1-1.5 min (4 cores, 12 options). Then the options are pre-rendered on
+# 6 runners in parallel, 2 each (light setup ~20 s + 2 x ~30 s), so the video step after a pick is only the caption pass. Limits 20 / 15 min.
 name: trace
 run-name: trace ${{ inputs.job }}
 on:
@@ -25,7 +25,8 @@ jobs:
       - name: trace options
         run: ~/venv/bin/python engine/studio.py trace in/photo.jpg.enc work --tag "$TAG"
       - id: opts
-        run: echo "opts=$(python3 -c "import json;print(json.dumps([o['id'] for o in json.load(open('engine/options.json'))['options']]))")" >> "$GITHUB_OUTPUT"
+        # pre-render groups: 2 options per runner (runners are free on a public repo, but only 20 run at once account-wide)
+        run: echo "opts=$(python3 -c "import json;i=[o['id'] for o in json.load(open('engine/options.json'))['options']];print(json.dumps([','.join(i[k:k+2]) for k in range(0,len(i),2)]))")" >> "$GITHUB_OUTPUT"
       - name: report failure
         if: failure()
         run: |
@@ -42,5 +43,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { models: "false", light: "true" }
-      - run: gh release download "$TAG" -p "opt_${{ matrix.option }}.tgz.enc" -D work
+      - run: for o in $(echo "${{ matrix.option }}" | tr ',' ' '); do gh release download "$TAG" -p "opt_${o}.tgz.enc" -D work; done
       - run: ~/venv/bin/python engine/studio.py prerender work "${{ matrix.option }}" --tag "$TAG"

@@ -1,13 +1,29 @@
 {
-  "_about": "One entry per option shown on the phone for every photo. crop: true = auto-crop around the subject (subject fills ~1/3 of the frame, more detail); false = the whole photo. style: settings passed to explore.py (hydrant technique + route order). Add, remove or reorder entries freely; ids must be short and unique.",
+  "_about": "One entry per option shown on the phone for every photo, in this order. crop: true = auto-crop around the subject (subject fills ~1/3 of the frame); false = the whole photo. style: settings for explore.py (hydrant technique + route order). Main knobs: Lmin = shortest stroke kept (higher = fewer, longer lines); target = how much line in total; flow = smoothing (higher = rounder, looser; lower = closer to the edges); arc_max = how wide the joins swing; scene = 1 adds a few background lines; avoid = 1 sends joins around dense areas. Options on the same image share the slow AI step, so each extra one costs ~5-8 s. ids: short and unique.",
   "options": [
-    { "id": "a", "name": "Detailed", "note": "auto-crop, more lines (the locked look)", "crop": true,
+    { "id": "a", "name": "Detailed", "note": "the locked look", "crop": true,
       "style": "scene=1 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1" },
-    { "id": "b", "name": "Open", "note": "auto-crop, fewer, longer lines", "crop": true,
+    { "id": "b", "name": "Open", "note": "fewer, longer lines", "crop": true,
       "style": "scene=1 flow=10 Lmin=0.05 arc_max=0.8 avoid=0 route=1" },
-    { "id": "c", "name": "Classic hydrant", "note": "auto-crop, original hydrant settings, route order", "crop": true,
+    { "id": "c", "name": "Classic hydrant", "note": "original hydrant settings", "crop": true,
       "style": "route=1 avoid=0" },
-    { "id": "d", "name": "Whole photo", "note": "no crop, detailed", "crop": false,
-      "style": "scene=1 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1" }
+    { "id": "d", "name": "Dense", "note": "most detail", "crop": true,
+      "style": "scene=1 flow=10 Lmin=0.025 target=22 arc_max=0.8 avoid=0 route=1" },
+    { "id": "e", "name": "Minimal", "note": "just the main shapes", "crop": true,
+      "style": "scene=1 flow=12 Lmin=0.07 target=8 arc_max=0.8 avoid=0 route=1" },
+    { "id": "f", "name": "Smooth", "note": "rounder, looser curves", "crop": true,
+      "style": "scene=1 flow=16 Lmin=0.04 target=14 arc_max=0.8 avoid=0 route=1" },
+    { "id": "g", "name": "Edge-true", "note": "follows the edges closely", "crop": true,
+      "style": "scene=1 flow=4 Lmin=0.035 target=16 arc_max=0.4 avoid=0 route=1" },
+    { "id": "h", "name": "Wide loops", "note": "big swinging joins", "crop": true,
+      "style": "scene=1 flow=10 Lmin=0.04 target=14 arc_max=1.4 avoid=0 route=1" },
+    { "id": "i", "name": "Subject only", "note": "no background lines", "crop": true,
+      "style": "scene=0 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1" },
+    { "id": "j", "name": "Around the ink", "note": "joins swing around dense parts", "crop": true,
+      "style": "scene=1 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=1 route=1" },
+    { "id": "k", "name": "Whole photo", "note": "no crop, detailed", "crop": false,
+      "style": "scene=1 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1" },
+    { "id": "l", "name": "Whole photo open", "note": "no crop, fewer lines", "crop": false,
+      "style": "scene=1 flow=10 Lmin=0.05 arc_max=0.8 avoid=0 route=1" }
   ]
 }

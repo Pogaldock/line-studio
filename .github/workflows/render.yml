@@ -10,6 +10,7 @@ on:
       option: { required: true }
       caption: { required: false, default: "" }
       seconds: { required: false, default: "26" }
+      ink: { required: false, default: "1" }
 permissions: { contents: write }
 concurrency: { group: "render-${{ inputs.job }}-${{ inputs.option }}", cancel-in-progress: true }
 jobs:
@@ -22,14 +23,14 @@ jobs:
       - uses: ./.github/actions/setup
         with: { models: "false", light: "true" }
       - name: get chosen drawing (and its pre-rendered master, when there is one for this speed)
-        env: { OPT: "${{ inputs.option }}", SECONDS_: "${{ inputs.seconds }}" }
+        env: { OPT: "${{ inputs.option }}", SECONDS_: "${{ inputs.seconds }}", INK: "${{ inputs.ink }}" }
         run: |
           gh release download "$TAG" -p "opt_${OPT}.tgz.enc" -D work
-          S=$(python3 -c "import sys;print(f'{float(sys.argv[1]):g}')" "$SECONDS_")
-          gh release download "$TAG" -p "raw_${OPT}_${S}.mp4.enc" -D work || echo "no pre-rendered master: full render"
+          M=$(python3 -c "import sys;print(f'raw_{sys.argv[1]}_{float(sys.argv[2]):g}_{float(sys.argv[3]):g}.mp4.enc')" "$OPT" "$SECONDS_" "$INK")
+          gh release download "$TAG" -p "$M" -D work || echo "no pre-rendered master ($M): full render"
       - name: render video
-        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}" }
-        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --tag "$TAG"
+        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}", INK: "${{ inputs.ink }}" }
+        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --ink "$INK" --tag "$TAG"
       - name: report failure
         if: failure()
         run: |
