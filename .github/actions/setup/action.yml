@@ -1,5 +1,5 @@
-# Shared setup: Python 3.13 + the pinned libraries in a cached virtualenv, and (for tracing) the AI models from the
-# models-v1 release, cached too. Cache hits make this ~1 min; a cold start ~4 min.
+# Shared setup: Python 3.13 + the pinned libraries in a cached virtualenv, and (for tracing) the AI models from their
+# official public releases (engine/models/models.txt: exact sha256 checked), cached too. Cache hits make this ~1 min; a cold start ~4 min.
 name: setup
 inputs:
   models: { default: "true" }
@@ -22,10 +22,15 @@ runs:
     - id: models
       if: inputs.models == 'true'
       uses: actions/cache@v4
-      with: { path: "engine/models/dl", key: "models-v1" }
+      with: { path: "engine/models/dl", key: "models-${{ hashFiles('engine/models/models.txt') }}" }
     - if: inputs.models == 'true' && steps.models.outputs.cache-hit != 'true'
       shell: bash
-      run: gh release download models-v1 -D engine/models/dl
+      run: |
+        mkdir -p engine/models/dl
+        grep -v '^#' engine/models/models.txt | while read -r f sum url; do
+          curl -fsSL --retry 3 "$url" -o "engine/models/dl/$f"
+          echo "$sum  engine/models/dl/$f" | sha256sum -c -
+        done
     - if: inputs.models == 'true'
       shell: bash
       run: |
