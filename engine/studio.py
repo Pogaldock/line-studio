@@ -4,7 +4,7 @@
 #   python3 studio.py render <workdir> <option_id> <caption text | variant index> [--seconds 26] [--tag job-xxx]
 #
 # Options come from options.json next to this file (name + crop on/off + style settings), so new looks are a JSON edit.
-# With --tag, results go to that GitHub release as they finish (stills one by one, progress.json after every step),
+# With --tag, results go to that GitHub release as they finish (stills one by one, progress_*.json after every step),
 # which is what the phone page reads. Without --tag everything just stays in <workdir>.
 # Privacy (the repo is public): with LS_KEY set (base64, 32 bytes; a repo secret), the photo arrives encrypted
 # (photo.jpg.enc) and every still, drawing bundle and video is encrypted before upload: AES-256-GCM, file = 12-byte
@@ -20,13 +20,15 @@ MAX_SIDE = 3000                                                        # phone p
 
 class Progress:
     # progress.json: overall stage + one entry per option; written locally and (rate limited) to the release
-    def __init__(s, work, tag, kind):
-        s.work, s.tag, s.lock = work, tag, threading.Lock(); s.last_push = 0.0; s.t0 = time.time()
+    # one file per run so several runs on the same photo never overwrite each other:
+    # progress_trace.json, progress_render_<option>.json
+    def __init__(s, work, tag, kind, fname):
+        s.work, s.tag, s.lock, s.fname = work, tag, threading.Lock(), fname; s.last_push = 0.0; s.t0 = time.time()
         s.d = dict(kind=kind, stage='starting', pct=0, options=[], started=int(s.t0), updated=int(s.t0), error=None, done=False)
     def set(s, push=False, **kw):
         with s.lock:
             s.d.update(kw); s.d['updated'] = int(time.time()); s.d['elapsed'] = round(time.time() - s.t0, 1)
-            p = os.path.join(s.work, 'progress.json'); json.dump(s.d, open(p, 'w'))
+            p = os.path.join(s.work, s.fname); json.dump(s.d, open(p, 'w'))
             if s.tag and (push or time.time() - s.last_push > 4): s.last_push = time.time(); upload(s.tag, [p])
         print(f"[studio {s.d['elapsed']:6.1f}s] {s.d['stage']} {s.d['pct']}%", flush=True)
     def opt(s, oid, **kw):
@@ -79,7 +81,7 @@ def preview(still_png, out_jpg, width=900):
 def trace(args):
     work = os.path.abspath(args.workdir); os.makedirs(work, exist_ok=True)
     opts = json.load(open(os.path.join(HERE, 'options.json')))['options']
-    pr = Progress(work, args.tag, 'trace')
+    pr = Progress(work, args.tag, 'trace', 'progress_trace.json')
     pr.d['options'] = [dict(id=o['id'], name=o['name'], note=o.get('note', ''), state='queued', pct=0) for o in opts]
     log = open(os.path.join(work, 'trace.log'), 'a')
     try:
@@ -124,7 +126,8 @@ def trace(args):
         pr.set(push=True, stage='failed', error=str(e)[-1500:], done=True); raise
 
 def render(args):
-    work = os.path.abspath(args.workdir); oid = args.option; pr = Progress(work, args.tag, 'render')
+    work = os.path.abspath(args.workdir); oid = args.option; pr = Progress(work, args.tag, 'render', f'progress_render_{oid}.json')
+    pr.d['option'] = oid
     d = os.path.join(work, f'render_{oid}'); os.makedirs(d, exist_ok=True); log = open(os.path.join(work, 'render.log'), 'a')
     try:
         pr.set(push=True, stage='unpacking the chosen drawing', pct=3)

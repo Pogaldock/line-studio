@@ -16,3 +16,4 @@ ultralytics-thop==2.2.5
 spandrel==0.4.2
 opencv-python==5.0.0.93
 cryptography==50.0.1
+imageio-ffmpeg==0.8.1

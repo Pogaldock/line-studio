@@ -19,6 +19,12 @@ runs:
         ~/venv/bin/pip install -q -r engine/requirements.txt
         ~/venv/bin/pip uninstall -y -q opencv-python
         ~/venv/bin/pip install -q --no-deps opencv-python-headless==5.0.0.93
+    - name: ffmpeg on PATH (pinned build bundled in imageio-ffmpeg, cached with the venv; the runner image has none)
+      shell: bash
+      run: |
+        ln -sf "$(ls ~/venv/lib/python3.13/site-packages/imageio_ffmpeg/binaries/ffmpeg-*)" ~/venv/bin/ffmpeg
+        echo "$HOME/venv/bin" >> "$GITHUB_PATH"
+        ~/venv/bin/ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx264
     - id: models
       if: inputs.models == 'true'
       uses: actions/cache@v4

@@ -25,6 +25,6 @@ jobs:
       - name: report failure
         if: failure()
         run: |
-          mkdir -p work; test -f work/progress.json && grep -q '"failed"' work/progress.json || \
-            echo '{"kind":"trace","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log","options":[]}' > work/progress.json
-          gh release upload "$TAG" work/progress.json --clobber
+          mkdir -p work; test -f "work/progress_trace.json" && grep -q '"failed"' "work/progress_trace.json" || \
+            echo '{"kind":"trace","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log","options":[]}' > "work/progress_trace.json"
+          gh release upload "$TAG" "work/progress_trace.json" --clobber
