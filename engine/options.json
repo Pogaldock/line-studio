@@ -1,0 +1,13 @@
+{
+  "_about": "One entry per option shown on the phone for every photo. crop: true = auto-crop around the subject (subject fills ~1/3 of the frame, more detail); false = the whole photo. style: settings passed to explore.py (hydrant technique + route order). Add, remove or reorder entries freely; ids must be short and unique.",
+  "options": [
+    { "id": "a", "name": "Detailed", "note": "auto-crop, more lines (the locked look)", "crop": true,
+      "style": "scene=1 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1" },
+    { "id": "b", "name": "Open", "note": "auto-crop, fewer, longer lines", "crop": true,
+      "style": "scene=1 flow=10 Lmin=0.05 arc_max=0.8 avoid=0 route=1" },
+    { "id": "c", "name": "Classic hydrant", "note": "auto-crop, original hydrant settings, route order", "crop": true,
+      "style": "route=1 avoid=0" },
+    { "id": "d", "name": "Whole photo", "note": "no crop, detailed", "crop": false,
+      "style": "scene=1 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1" }
+  ]
+}

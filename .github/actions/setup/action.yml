@@ -1,0 +1,34 @@
+# Shared setup: Python 3.13 + the pinned libraries in a cached virtualenv, and (for tracing) the AI models from the
+# models-v1 release, cached too. Cache hits make this ~1 min; a cold start ~4 min.
+name: setup
+inputs:
+  models: { default: "true" }
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with: { python-version: "3.13" }
+    - id: venv
+      uses: actions/cache@v4
+      with: { path: ~/venv, key: "venv-${{ runner.os }}-py313-${{ hashFiles('engine/requirements.txt') }}" }
+    - if: steps.venv.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        python -m venv ~/venv
+        ~/venv/bin/pip install -q --upgrade pip
+        ~/venv/bin/pip install -q -r engine/requirements.txt
+        ~/venv/bin/pip uninstall -y -q opencv-python
+        ~/venv/bin/pip install -q --no-deps opencv-python-headless==5.0.0.93
+    - id: models
+      if: inputs.models == 'true'
+      uses: actions/cache@v4
+      with: { path: "engine/models/dl", key: "models-v1" }
+    - if: inputs.models == 'true' && steps.models.outputs.cache-hit != 'true'
+      shell: bash
+      run: gh release download models-v1 -D engine/models/dl
+    - if: inputs.models == 'true'
+      shell: bash
+      run: |
+        for f in engine/models/dl/*; do case "$f" in *isnet-general-use.onnx) ;; *) ln -sf "$PWD/$f" engine/models/ ;; esac; done
+        mkdir -p ~/.rembg/models/isnet-general-use && ln -sf "$PWD/engine/models/dl/isnet-general-use.onnx" ~/.rembg/models/isnet-general-use/
+        echo "U2NET_HOME=$HOME/.rembg" >> "$GITHUB_ENV"

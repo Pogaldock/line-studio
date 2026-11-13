@@ -1,0 +1,33 @@
+# Chosen option -> captioned 30 s video (video_<option>.mp4 on release job-<id>). Started by the phone page.
+# Planned time: setup 1 min (cached), render ~1 min on 2 cores. Limit 15 min.
+name: render
+run-name: render ${{ inputs.job }} ${{ inputs.option }}
+on:
+  workflow_dispatch:
+    inputs:
+      job: { required: true }
+      option: { required: true }
+      caption: { required: false, default: "" }
+      seconds: { required: false, default: "26" }
+permissions: { contents: write }
+concurrency: { group: "render-${{ inputs.job }}-${{ inputs.option }}", cancel-in-progress: true }
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env: { GH_TOKEN: "${{ github.token }}", TAG: "job-${{ inputs.job }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "false" }
+      - name: get chosen drawing
+        run: gh release download "$TAG" -p "opt_${{ inputs.option }}.tgz" -D work
+      - name: render video
+        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}" }
+        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --tag "$TAG"
+      - name: report failure
+        if: failure()
+        run: |
+          mkdir -p work; test -f work/progress.json && grep -q '"failed"' work/progress.json || \
+            echo '{"kind":"render","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log"}' > work/progress.json
+          gh release upload "$TAG" work/progress.json --clobber

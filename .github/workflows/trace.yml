@@ -1,0 +1,30 @@
+# Photo -> drawing options. Started by the phone page (symbiozefpv.com/admin/lines) through the site Worker:
+# the photo is already attached to release job-<id>; stills, line data and progress.json go back to that release.
+# Planned time: setup 1 min (cached) / 4 min (first run), trace ~1-2 min on 2 cores. Limit 20 min.
+name: trace
+run-name: trace ${{ inputs.job }}
+on:
+  workflow_dispatch:
+    inputs:
+      job: { description: "job id (release job-<id> holds photo.jpg)", required: true }
+permissions: { contents: write }
+concurrency: { group: "job-${{ inputs.job }}", cancel-in-progress: false }
+jobs:
+  trace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env: { GH_TOKEN: "${{ github.token }}", TAG: "job-${{ inputs.job }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "true" }
+      - name: get photo
+        run: gh release download "$TAG" -p photo.jpg -D in
+      - name: trace options
+        run: ~/venv/bin/python engine/studio.py trace in/photo.jpg work --tag "$TAG"
+      - name: report failure
+        if: failure()
+        run: |
+          mkdir -p work; test -f work/progress.json && grep -q '"failed"' work/progress.json || \
+            echo '{"kind":"trace","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log","options":[]}' > work/progress.json
+          gh release upload "$TAG" work/progress.json --clobber
