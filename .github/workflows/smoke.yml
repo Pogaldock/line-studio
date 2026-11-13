@@ -1,0 +1,26 @@
+# Smoke test of the whole chain on a runner: reference check (does this machine draw the locked look exactly?),
+# then a real job: release job-smoke-<run> with a reference photo -> trace all options -> render option a with a caption.
+# Planned: setup 4 min cold, regress 1 min, trace 2 min, render 1.5 min. Limit 25 min.
+name: smoke
+on: { workflow_dispatch: {} }
+permissions: { contents: write }
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env: { GH_TOKEN: "${{ github.token }}", TAG: "job-smoke-${{ github.run_id }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "true" }
+      - name: reference check
+        continue-on-error: true
+        run: ~/venv/bin/python tools/regress.py
+      - name: test job release
+        run: gh release create "$TAG" tools/ref/p12838/photo.jpg --title "$TAG" --notes '{"name":"smoke test"}' --prerelease
+      - name: trace
+        run: ~/venv/bin/python engine/studio.py trace tools/ref/p12838/photo.jpg work --tag "$TAG"
+      - name: render
+        run: ~/venv/bin/python engine/studio.py render work a "doing lines again sorry" --tag "$TAG"
+      - name: result
+        run: gh release view "$TAG" --json assets -q '.assets[]|"\(.name) \(.size)"'
