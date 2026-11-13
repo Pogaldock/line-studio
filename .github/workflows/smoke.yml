@@ -22,7 +22,11 @@ jobs:
           gh release create "$TAG" photo.jpg.enc --title "$TAG" --notes '{"name":"smoke test"}' --prerelease
       - name: trace
         run: ~/venv/bin/python engine/studio.py trace photo.jpg.enc work --tag "$TAG"
-      - name: render
+      - name: pre-render option a
+        run: ~/venv/bin/python engine/studio.py prerender work a --tag "$TAG"
+      - name: render a (caption pass on the master)
         run: ~/venv/bin/python engine/studio.py render work a "doing lines again sorry" --tag "$TAG"
+      - name: render b at another speed (full render)
+        run: ~/venv/bin/python engine/studio.py render work b "i cant stop doing lines" --seconds 20 --tag "$TAG"
       - name: result
         run: gh release view "$TAG" --json assets -q '.assets[]|"\(.name) \(.size)"'

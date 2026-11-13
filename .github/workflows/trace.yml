@@ -1,6 +1,7 @@
 # Photo -> drawing options. Started by the phone page through the site Worker (admin only):
 # the photo is already attached to release job-<id>; stills, line data and progress.json go back to that release.
-# Planned time: setup 1 min (cached) / 4 min (first run), trace ~1-2 min on 2 cores. Limit 20 min.
+# Planned time: setup ~1 min, trace ~1 min (4 cores). Then every option is pre-rendered on its own runner in parallel
+# (light setup ~15 s + ~40 s), so the video step after a pick is only the caption pass. Limits 20 / 15 min.
 name: trace
 run-name: trace ${{ inputs.job }}
 on:
@@ -13,6 +14,7 @@ jobs:
   trace:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs: { opts: "${{ steps.opts.outputs.opts }}" }
     env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}", TAG: "job-${{ inputs.job }}" }
     steps:
       - uses: actions/checkout@v4
@@ -22,9 +24,23 @@ jobs:
         run: gh release download "$TAG" -p photo.jpg.enc -D in
       - name: trace options
         run: ~/venv/bin/python engine/studio.py trace in/photo.jpg.enc work --tag "$TAG"
+      - id: opts
+        run: echo "opts=$(python3 -c "import json;print(json.dumps([o['id'] for o in json.load(open('engine/options.json'))['options']]))")" >> "$GITHUB_OUTPUT"
       - name: report failure
         if: failure()
         run: |
           mkdir -p work; test -f "work/progress_trace.json" && grep -q '"failed"' "work/progress_trace.json" || \
             echo '{"kind":"trace","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log","options":[]}' > "work/progress_trace.json"
           gh release upload "$TAG" "work/progress_trace.json" --clobber
+  prerender:
+    needs: trace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy: { fail-fast: false, matrix: { option: "${{ fromJSON(needs.trace.outputs.opts) }}" } }
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}", TAG: "job-${{ inputs.job }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "false", light: "true" }
+      - run: gh release download "$TAG" -p "opt_${{ matrix.option }}.tgz.enc" -D work
+      - run: ~/venv/bin/python engine/studio.py prerender work "${{ matrix.option }}" --tag "$TAG"

@@ -1,0 +1,10 @@
+# Video jobs only (pre-render, caption pass, full render): no AI models, so no torch/ultralytics/rembg.
+# Same pinned versions as requirements.txt for everything the video path imports.
+numpy==2.5.3
+scipy==1.18.1
+scikit-image==0.26.0
+networkx==3.7
+pillow==12.3.0
+opencv-python-headless==5.0.0.93
+cryptography==50.0.1
+imageio-ffmpeg==0.8.1

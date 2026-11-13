@@ -1,5 +1,6 @@
 # Chosen option -> captioned 30 s video (video_<option>.mp4 on release job-<id>). Started by the phone page.
-# Planned time: setup 1 min (cached), render ~1 min on 2 cores. Limit 15 min.
+# Planned time: light setup ~15 s; with the pre-rendered master only the caption pass (~15 s), otherwise a full
+# render (~40 s on 4 cores). Limit 15 min.
 name: render
 run-name: render ${{ inputs.job }} ${{ inputs.option }}
 on:
@@ -19,9 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-        with: { models: "false" }
-      - name: get chosen drawing
-        run: gh release download "$TAG" -p "opt_${{ inputs.option }}.tgz.enc" -D work
+        with: { models: "false", light: "true" }
+      - name: get chosen drawing (and its pre-rendered master, when there is one for this speed)
+        env: { OPT: "${{ inputs.option }}", SECONDS_: "${{ inputs.seconds }}" }
+        run: |
+          gh release download "$TAG" -p "opt_${OPT}.tgz.enc" -D work
+          S=$(python3 -c "import sys;print(f'{float(sys.argv[1]):g}')" "$SECONDS_")
+          gh release download "$TAG" -p "raw_${OPT}_${S}.mp4.enc" -D work || echo "no pre-rendered master: full render"
       - name: render video
         env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}" }
         run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --tag "$TAG"

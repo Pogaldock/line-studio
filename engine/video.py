@@ -313,7 +313,7 @@ def render_chunk(job):
         drawn = idx
     ink_to(plan[f0][4])                                  # catch up to where this chunk starts
     ff = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-',
-                           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p', '-threads', '1', path], stdin=subprocess.PIPE)
+                           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', __import__('os').environ.get('CRF', '19'), '-pix_fmt', 'yuv420p', '-threads', '1', path], stdin=subprocess.PIPE)
     for f in range(f0, f1):
         c, z, col, white, idx, hand_ = plan[f]
         ink_to(idx)

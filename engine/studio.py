@@ -2,6 +2,11 @@
 #
 #   python3 studio.py trace  <photo> <workdir> [--tag job-xxx]
 #   python3 studio.py render <workdir> <option_id> <caption text | variant index> [--seconds 26] [--tag job-xxx]
+#   python3 studio.py prerender <workdir> <option_id> [--seconds 26] [--tag job-xxx]
+#
+# Speed: right after the trace, every option is pre-rendered without a caption (raw_<option>_<seconds>.mp4, a
+# near-lossless master). `render` then only burns the caption onto that master (one quick encode); without a master
+# (other speed, or tapped before it was ready) it renders in full. Same drawing, same frames either way.
 #
 # Options come from options.json next to this file (name + crop on/off + style settings), so new looks are a JSON edit.
 # With --tag, results go to that GitHub release as they finish (stills one by one, progress_*.json after every step),
@@ -125,32 +130,68 @@ def trace(args):
     except Exception as e:
         pr.set(push=True, stage='failed', error=str(e)[-1500:], done=True); raise
 
+def unpack(work, oid, d):
+    tgz = os.path.join(work, f'opt_{oid}.tgz')
+    if not os.path.exists(tgz) and os.path.exists(tgz + '.enc'): unseal(tgz + '.enc', tgz)
+    with tarfile.open(tgz) as t: t.extractall(d, filter='data')
+
+def frames_progress(pr, lo, hi, label):
+    state = {}
+    def on_line(line):                                       # video.py logs "chunk i: frame f/n" -> overall %
+        if 'chunk' in line and 'frame' in line:
+            try:
+                c = int(line.split('chunk')[1].split(':')[0]); f, n = line.split('frame')[1].split()[0].split('/')
+                state[c] = (int(f), int(n)); done = sum(v[0] for v in state.values()); tot = max(sum(v[1] for v in state.values()), 1)
+                pr.set(stage=label, pct=int(lo + (hi - lo) * done / tot))
+            except Exception: pass
+    return on_line
+
+def draw_video(d, out, seconds, pr, lo, hi, caption_png=None, crf='19'):
+    env = dict(NO916='1', HUMANIZE='1', HU_ARGS=HU_ARGS, NOIPAD='1', CRF=crf)
+    if caption_png: env['CAPTION_PNG'] = caption_png
+    run([PY, 'make916.py', os.path.join(d, 'photo.jpg'), os.path.join(d, 'line'), out, str(seconds)], env=env,
+        log=open(os.path.join(os.path.dirname(d), 'render.log'), 'a'), on_line=frames_progress(pr, lo, hi, 'drawing the video frames'))
+
+def caption_png(text, path):
+    sys.path.insert(0, HERE); import caption as CP
+    img = np.array(CP.caption_rgba(CP.pick('x', text if text.strip() else '0'), 1080, 1920))
+    cv2.imwrite(path, cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)); return path
+
+def secs_tag(x): return f'{float(x):g}'
+
+def prerender(args):
+    work = os.path.abspath(args.workdir); oid = args.option; d = os.path.join(work, f'pre_{oid}'); os.makedirs(d, exist_ok=True)
+    unpack(work, oid, d)
+    raw = os.path.join(work, f'raw_{oid}_{secs_tag(args.seconds)}.mp4')
+    class Quiet:                                               # no progress file: nobody is waiting on this one
+        def set(self, **kw): pass
+    draw_video(d, raw, args.seconds, Quiet(), 0, 100, crf='12')
+    upload_private(args.tag, [raw])
+
 def render(args):
     work = os.path.abspath(args.workdir); oid = args.option; pr = Progress(work, args.tag, 'render', f'progress_render_{oid}.json')
     pr.d['option'] = oid
-    d = os.path.join(work, f'render_{oid}'); os.makedirs(d, exist_ok=True); log = open(os.path.join(work, 'render.log'), 'a')
+    d = os.path.join(work, f'render_{oid}'); os.makedirs(d, exist_ok=True)
     try:
-        pr.set(push=True, stage='unpacking the chosen drawing', pct=3)
-        tgz = os.path.join(work, f'opt_{oid}.tgz')
-        if not os.path.exists(tgz) and os.path.exists(tgz + '.enc'): unseal(tgz + '.enc', tgz)
-        with tarfile.open(tgz) as t: t.extractall(d, filter='data')
-        final = os.path.join(work, f'video_{oid}.mp4')
-        pr.set(stage='drawing the video frames', pct=8)
-        state = {}
-        def on_line(line):                                   # "chunk i: frame f/n" -> overall %
-            if 'chunk' in line and 'frame' in line:
-                try:
-                    c = int(line.split('chunk')[1].split(':')[0]); f, n = line.split('frame')[1].split()[0].split('/')
-                    state[c] = (int(f), int(n)); done = sum(v[0] for v in state.values()); tot = max(sum(v[1] for v in state.values()), 1)
-                    pr.set(stage='drawing the video frames', pct=int(8 + 80 * done / tot))
-                except Exception: pass
-        sys.path.insert(0, HERE); import caption as CP
-        text = CP.pick('x', args.caption if args.caption.strip() else '0')
-        capf = os.path.join(d, 'caption.png'); img = np.array(CP.caption_rgba(text, 1080, 1920))
-        cv2.imwrite(capf, cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA))
-        run([PY, 'make916.py', os.path.join(d, 'photo.jpg'), os.path.join(d, 'line'), final, str(args.seconds)],
-            env=dict(NO916='1', HUMANIZE='1', HU_ARGS=HU_ARGS, NOIPAD='1', CAPTION_PNG=capf), log=log, on_line=on_line)
-        pr.set(stage='uploading the video', pct=96)
+        final = os.path.join(work, f'video_{oid}.mp4'); capf = caption_png(args.caption, os.path.join(work, f'caption_{oid}.png'))
+        raw = os.path.join(work, f'raw_{oid}_{secs_tag(args.seconds)}.mp4')
+        if not os.path.exists(raw) and os.path.exists(raw + '.enc'): unseal(raw + '.enc', raw)
+        if os.path.exists(raw):                                # pre-rendered master: only the caption pass
+            pr.set(push=True, stage='adding the caption to the pre-rendered video', pct=20)
+            p = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-i', raw, '-i', capf, '-filter_complex', 'overlay=0:0', '-c:v', 'libx264', '-preset', 'veryfast',
+                                  '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-progress', 'pipe:1', final], stdout=subprocess.PIPE, text=True)
+            total_us = float(args.seconds + 4) * 1e6
+            for line in p.stdout:                              # ffmpeg reports out_time_us as it encodes
+                if line.startswith('out_time_us='):
+                    try: pr.set(stage='adding the caption to the pre-rendered video', pct=int(20 + 70 * min(1, float(line.split('=')[1]) / total_us)))
+                    except ValueError: pass
+            if p.wait(): raise RuntimeError('caption pass failed')
+        else:                                                  # no master for this speed: full render, caption burned in
+            pr.set(push=True, stage='unpacking the chosen drawing', pct=3)
+            unpack(work, oid, d)
+            pr.set(stage='drawing the video frames', pct=8)
+            draw_video(d, final, args.seconds, pr, 8, 90, caption_png=capf)
+        pr.set(stage='uploading the video', pct=94)
         upload_private(args.tag, [final])
         pr.set(push=True, stage='video ready', pct=100, done=True, video=os.path.basename(final))
     except Exception as e:
@@ -161,4 +202,5 @@ if __name__ == '__main__':
     a = sp.add_parser('trace'); a.add_argument('photo'); a.add_argument('workdir'); a.add_argument('--tag')
     b = sp.add_parser('render'); b.add_argument('workdir'); b.add_argument('option'); b.add_argument('caption')
     b.add_argument('--seconds', type=float, default=26); b.add_argument('--tag')
-    args = ap.parse_args(); (trace if args.cmd == 'trace' else render)(args)
+    c = sp.add_parser('prerender'); c.add_argument('workdir'); c.add_argument('option'); c.add_argument('--seconds', type=float, default=26); c.add_argument('--tag')
+    args = ap.parse_args(); dict(trace=trace, render=render, prerender=prerender)[args.cmd](args)
