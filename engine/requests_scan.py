@@ -186,6 +186,8 @@ def main(dry=False):
                             ts=c.get('create_time', 0), status='new', found=int(time.time()), uid=uid)); known.add(cid)
         state['videos'][vid] = n; time.sleep(0.8)
     if 'TEST' in globals(): new.append(TEST)
+    if '--clean-tests' in sys.argv:                     # remove every entry made by a test run
+        n0 = len(state['requests']); state['requests'] = [e for e in state['requests'] if not e.get('test')]; log(f'removed {n0 - len(state["requests"])} test entries')
     if TEST_INBOX:                                      # end-to-end test: a mock screenshot (stock faces, made-up names) + a typed @name
         shot = os.path.join(WORK, 'shot_test' + uuid.uuid4().hex[:4] + '.png'); import shutil; shutil.copy(os.path.join(HERE, '..', 'tools', 'test', 'comments_mock.png'), shot)
         add = os.path.join(WORK, 'add_test' + uuid.uuid4().hex[:4] + '.json'); json.dump({'handles': [TEST_INBOX]}, open(add, 'w'))

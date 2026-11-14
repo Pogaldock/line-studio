@@ -11,6 +11,7 @@ on:
       test_account: { description: "optional: also process this account's picture as a request (end-to-end test)", required: false, default: "" }
       redo: { description: "process every request not marked posted again (after a change to the look)", type: boolean, default: false }
       test_inbox: { description: "optional: test the screenshot inbox (mock screenshot + this typed @name)", required: false, default: "" }
+      clean_tests: { description: "remove every entry made by a test run", type: boolean, default: false }
 permissions: { contents: write }
 concurrency: { group: requests, cancel-in-progress: false }
 jobs:
@@ -27,7 +28,7 @@ jobs:
         run: gh release view requests > /dev/null 2>&1 || gh release create requests --title requests --prerelease --notes "request list state (encrypted)"
       - id: scan
         name: read comments
-        env: { TEST: "${{ inputs.test_account }}", REDO: "${{ inputs.redo && '--redo' || '' }}", TI: "${{ inputs.test_inbox }}" }
+        env: { TEST: "${{ inputs.test_account }}", REDO: "${{ inputs.redo && '--redo' || '' }}", TI: "${{ inputs.test_inbox }}", CLEAN: "${{ inputs.clean_tests && '--clean-tests' || '' }}" }
         run: |
           if [ -n "$TI" ]; then
             [[ "$TI" =~ ^[A-Za-z0-9._]{2,30}$ ]] || { echo "bad account name"; exit 1; }
@@ -35,7 +36,7 @@ jobs:
           elif [ -n "$TEST" ]; then
             [[ "$TEST" =~ ^[A-Za-z0-9._]{2,30}$ ]] || { echo "bad account name"; exit 1; }
             ~/venv/bin/python -u engine/requests_scan.py --scan-only --test "$TEST" "draw me pls"
-          else ~/venv/bin/python -u engine/requests_scan.py --scan-only $REDO; fi
+          else ~/venv/bin/python -u engine/requests_scan.py --scan-only $REDO $CLEAN; fi
   draw:
     needs: scan
     if: needs.scan.outputs.pending != '0' && needs.scan.outputs.pending != ''
