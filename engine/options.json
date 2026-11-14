@@ -11,9 +11,9 @@
     {
       "id": "u",
       "name": "Illustration",
-      "note": "drawings and anime pfps: whole figure found by depth, scribbles cleaned",
+      "note": "drawings and anime pfps: Profile picture, with the whole figure found by depth",
       "crop": false,
-      "style": "scene=0 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1 depth_subject=1 wobble=0.4 wobble_face=0 wobble_long=0.3 merge=0.07 hop=0.12 quiet_joins=0.12 depth=1 depth_keep=0.25 depth_flat=2.5 depth_w=1.2 depth_flow=0.1"
+      "style": "scene=0 flow=10 Lmin=0.035 target=16 arc_max=0.8 avoid=0 route=1 depth_subject=1"
     },
     {
       "id": "a",
