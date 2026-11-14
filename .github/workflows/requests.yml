@@ -1,7 +1,7 @@
 # Request list: every 10 minutes a light job reads the comments on the account's videos (no AI models, ~30 s); only when
 # a request is waiting does the drawing job start (models, ~2 min per request, at most 10 per run).
 # engine/requests_scan.py, settings in engine/requests_config.json. State and every image encrypted (release "requests",
-# job-<id> releases). Limits: scan 10 min, draw 40 min.
+# job-<id> releases). Limits: scan 10 min, draw 40 min. From the phone (fast=true): one job does both (~2 min to a video).
 name: requests
 run-name: requests${{ inputs.test_account && format(' (test {0})', inputs.test_account) || '' }}${{ inputs.redo && ' (redo)' || '' }}
 on:
@@ -12,10 +12,12 @@ on:
       redo: { description: "process every request not marked posted again (after a change to the look)", type: boolean, default: false }
       test_inbox: { description: "optional: test the screenshot inbox (mock screenshot + this typed @name)", required: false, default: "" }
       clean_tests: { description: "remove every entry made by a test run", type: boolean, default: false }
+      fast: { description: "one job (read + draw) for requests added from the phone: no second wait for a runner", type: boolean, default: false }
 permissions: { contents: write }
 concurrency: { group: requests, cancel-in-progress: false }
 jobs:
   scan:
+    if: ${{ !inputs.fast }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs: { pending: "${{ steps.scan.outputs.pending }}" }
@@ -49,3 +51,15 @@ jobs:
         with: { models: "true" }
       - name: draw the waiting requests
         run: ~/venv/bin/python -u engine/requests_scan.py --process-only
+  now:
+    # added from the phone: read the inbox and draw in the same job (one runner wait, one setup)
+    if: ${{ inputs.fast }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "true" }
+      - name: read the inbox and draw
+        run: ~/venv/bin/python -u engine/requests_scan.py
