@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-        with: { light: "true" }
+        with: { light: "true", models: "false" }
       - name: state release
         run: gh release view requests > /dev/null 2>&1 || gh release create requests --title requests --prerelease --notes "request list state (encrypted)"
       - id: scan
