@@ -166,19 +166,21 @@ def process(e, avatar, f):
     if not ok: return 'skipped', why, jid, ''
     cname = 'comment_' + uuid.uuid4().hex[:8] + '.png'; card(avatar, '@' + e['handle'], e['text'], os.path.join(w, cname))
     ST.upload_private(tag, [os.path.join(w, cname)]); rid = uuid.uuid4().hex[:6]
+    e.update(comment=cname + '.enc', cstyle=v['comment_style'], caption=v['caption'])
     subprocess.run([py, os.path.join(HERE, 'studio.py'), 'render', w, v['option'], v['caption'], '--seconds', str(v['seconds']),
                     '--comment', cname + '.enc', '--cstyle', v['comment_style'], '--rid', rid, '--tag', tag], check=True)
     return 'ready', '', jid, rid
 
 def main(dry=False):
     acc = CFG['account']; state = load('requests.json.enc', {'requests': [], 'videos': {}})
-    state['account'] = acc; state['scanned'] = int(time.time())
-    names = state.setdefault('names', {})
+    state['account'] = acc; state['scanned'] = int(time.time()); state['post_caption'] = CFG.get('post_caption', '')
+    names = state.setdefault('names', {}); hidden = state.setdefault('hidden', {})   # hidden: {video: comments TikTok kept from the scan}
     known = {e['cid'] for e in state['requests']}; people = {e.get('uid') or e['handle'] for e in state['requests']}; vids = {} if PROCESS_ONLY else videos(acc); log(f'{len(vids)} videos on @{acc}')
     new = []
     for vid, n in vids.items():
-        if n == 0 or state['videos'].get(vid) == n: continue                # nothing new under this video since last run
-        for c in comments(vid):
+        if n == 0 or (state['videos'].get(vid) == n and state.get('hidden_counted')): continue   # nothing new under this video
+        cs = comments(vid)
+        for c in cs:
             u = c.get('user') or {}; cid = c.get('cid'); text = c.get('text') or ''
             if u.get('nickname') and u.get('unique_id'):          # display name -> @handle, for reading screenshots later
                 hs = names.setdefault(SR._plain(u['nickname']), [])
@@ -188,7 +190,11 @@ def main(dry=False):
             people.add(uid)
             new.append(dict(cid=cid, vid=vid, handle=u.get('unique_id', ''), nick=u.get('nickname', ''), text=text[:300],
                             ts=c.get('create_time', 0), status='new', found=int(time.time()), uid=uid)); known.add(cid)
+        got = len(cs) + sum(int(c.get('reply_comment_total') or 0) for c in cs)
+        if n > got: hidden[vid] = n - got
+        else: hidden.pop(vid, None)
         state['videos'][vid] = n; time.sleep(0.8)
+    state['hidden_counted'] = True                     # first run with hidden counts reads every video once
     if 'TEST' in globals(): new.append(TEST)
     if '--clean-tests' in sys.argv:                     # remove every entry made by a test run
         n0 = len(state['requests']); state['requests'] = [e for e in state['requests'] if not e.get('test')]; log(f'removed {n0 - len(state["requests"])} test entries')
