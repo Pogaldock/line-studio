@@ -275,11 +275,14 @@ def prerender(args):
         print(f'[studio] master ready: {os.path.basename(raw)}', flush=True)
 
 def render(args):
-    work = os.path.abspath(args.workdir); oid = args.option; pr = Progress(work, args.tag, 'render', f'progress_render_{oid}.json')
+    import re
+    if args.rid and not re.fullmatch(r'[a-z0-9]{4,10}', args.rid): raise SystemExit('bad rid')
+    work = os.path.abspath(args.workdir); oid = args.option; sfx = f'_{args.rid}' if args.rid else ''   # rid: this render's own id
+    pr = Progress(work, args.tag, 'render', f'progress_render_{oid}{sfx}.json')
     pr.d['option'] = oid
     d = os.path.join(work, f'render_{oid}'); os.makedirs(d, exist_ok=True)
     try:
-        final = os.path.join(work, f'video_{oid}.mp4'); capf = caption_png(args.caption, os.path.join(work, f'caption_{oid}.png'))
+        final = os.path.join(work, f'video_{oid}{sfx}.mp4'); capf = caption_png(args.caption, os.path.join(work, f'caption_{oid}.png'))
         raw = master_name(work, oid, args.seconds, args.ink)
         if not os.path.exists(raw) and os.path.exists(raw + '.enc'): unseal(raw + '.enc', raw)
         comment = None
@@ -312,5 +315,6 @@ if __name__ == '__main__':
     b = sp.add_parser('render'); b.add_argument('workdir'); b.add_argument('option'); b.add_argument('caption')
     b.add_argument('--seconds', type=float, default=26); b.add_argument('--ink', type=float, default=1.0); b.add_argument('--tag')
     b.add_argument('--comment', default='', help='encrypted comment crop asset (comment_*.png.enc) in the workdir'); b.add_argument('--cstyle', default='')
+    b.add_argument('--rid', default='', help="this render's own id (4-10 of a-z0-9): video_<option>_<rid>.mp4")
     c = sp.add_parser('prerender'); c.add_argument('workdir'); c.add_argument('option', help='one id or several: a,e'); c.add_argument('--seconds', type=float, default=26); c.add_argument('--ink', type=float, default=1.0); c.add_argument('--tag')
     args = ap.parse_args(); dict(trace=trace, render=render, prerender=prerender)[args.cmd](args)

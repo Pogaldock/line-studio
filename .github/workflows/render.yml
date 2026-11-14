@@ -2,7 +2,7 @@
 # Planned time: light setup ~15 s; with the pre-rendered master only the caption (+ comment) pass (~15 s), otherwise
 # a master render (~40 s on 4 cores) then that pass. Limit 15 min.
 name: render
-run-name: render ${{ inputs.job }} ${{ inputs.option }}
+run-name: render ${{ inputs.job }} ${{ inputs.option }} ${{ inputs.rid }}
 on:
   workflow_dispatch:
     inputs:
@@ -13,8 +13,9 @@ on:
       ink: { required: false, default: "1" }
       comment: { required: false, default: "" }
       cstyle: { required: false, default: "" }
+      rid: { required: false, default: "" }
 permissions: { contents: write }
-concurrency: { group: "render-${{ inputs.job }}-${{ inputs.option }}", cancel-in-progress: true }
+concurrency: { group: "render-${{ inputs.job }}-${{ inputs.option }}-${{ inputs.rid }}", cancel-in-progress: true }
 jobs:
   render:
     runs-on: ubuntu-24.04
@@ -37,11 +38,12 @@ jobs:
           [[ "$COMMENT" =~ ^comment_[a-z0-9]{1,12}\.png\.enc$ ]] || { echo "bad comment name"; exit 1; }
           gh release download "$TAG" -p "$COMMENT" -D work
       - name: render video
-        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}", INK: "${{ inputs.ink }}", COMMENT: "${{ inputs.comment }}", CSTYLE: "${{ inputs.cstyle }}" }
-        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --ink "$INK" --comment "$COMMENT" --cstyle "$CSTYLE" --tag "$TAG"
+        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}", INK: "${{ inputs.ink }}", COMMENT: "${{ inputs.comment }}", CSTYLE: "${{ inputs.cstyle }}", RID: "${{ inputs.rid }}" }
+        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --ink "$INK" --comment "$COMMENT" --cstyle "$CSTYLE" --rid "$RID" --tag "$TAG"
       - name: report failure
         if: failure()
+        env: { P: "progress_render_${{ inputs.option }}${{ inputs.rid != '' && '_' || '' }}${{ inputs.rid }}.json" }
         run: |
-          mkdir -p work; test -f "work/progress_render_${{ inputs.option }}.json" && grep -q '"failed"' "work/progress_render_${{ inputs.option }}.json" || \
-            echo '{"kind":"render","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log"}' > "work/progress_render_${{ inputs.option }}.json"
-          gh release upload "$TAG" "work/progress_render_${{ inputs.option }}.json" --clobber
+          mkdir -p work; test -f "work/$P" && grep -q '"failed"' "work/$P" || \
+            echo '{"kind":"render","stage":"failed","pct":0,"done":true,"error":"runner setup failed: see the Actions log"}' > "work/$P"
+          gh release upload "$TAG" "work/$P" --clobber
