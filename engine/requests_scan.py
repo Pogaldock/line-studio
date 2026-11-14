@@ -52,6 +52,34 @@ def comments(vid):
         cur = d.get('cursor', cur + 50); time.sleep(0.7)
     return out
 
+# second source: tikwm.com, a public TikTok data service. TikTok shows logged-out readers only part of the comments (photo
+# comments and others are held back); this one returns the full list with each commenter's @handle. Free use is limited
+# to 1 request a second. Results are put in TikTok's own comment format, so the rest of the scan does not care.
+def comments_tikwm(acc, vid):
+    out, cur = [], 0
+    while len(out) < 500:
+        time.sleep(1.1)
+        r = http('https://www.tikwm.com/api/comment/list', params=dict(url=f'https://www.tiktok.com/@{acc}/video/{vid}', count=50, cursor=cur))
+        try: d = (r.json() or {}).get('data') or {} if r else {}
+        except Exception: break
+        for c in d.get('comments') or []:
+            u = c.get('user') or {}
+            out.append(dict(cid=str(c.get('id')), text=c.get('text') or '', create_time=c.get('create_time', 0), reply_comment_total=c.get('reply_total', 0),
+                            user=dict(uid=str(u.get('id', '')), unique_id=u.get('unique_id', ''), nickname=u.get('nickname', ''))))
+        if not d.get('hasMore'): break
+        cur = d.get('cursor', cur + 50)
+    return out
+
+def followers_tikwm(acc):
+    # the account's followers, newest first (the service's follower list; switched off at times: then nothing)
+    p = profile(acc); uid = p and p.get('uid')
+    if not uid: return []
+    time.sleep(1.1)
+    r = http('https://www.tikwm.com/api/user/followers', params=dict(user_id=uid, count=50, cursor=0))
+    try: d = (r.json() or {}).get('data') or {} if r else {}
+    except Exception: return []
+    return [dict(uid=str(f.get('id', '')), unique_id=f.get('unique_id', ''), nickname=f.get('nickname', '')) for f in d.get('followers') or [] if f.get('unique_id')]
+
 def big_avatar(unique_id):
     r = http(f'https://www.tiktok.com/@{unique_id}')
     m = r and re.search(r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', r.text, re.S)
@@ -179,7 +207,8 @@ def main(dry=False):
     new = []
     for vid, n in vids.items():
         if n == 0 or (state['videos'].get(vid) == n and state.get('hidden_counted')): continue   # nothing new under this video
-        cs = comments(vid)
+        cs = comments(vid); have = {c.get('cid') for c in cs}
+        cs += [c for c in comments_tikwm(acc, vid) if c['cid'] not in have]          # the comments TikTok hides from the scan
         for c in cs:
             u = c.get('user') or {}; cid = c.get('cid'); text = c.get('text') or ''
             if u.get('nickname') and u.get('unique_id'):          # display name -> @handle, for reading screenshots later
@@ -195,6 +224,13 @@ def main(dry=False):
         else: hidden.pop(vid, None)
         state['videos'][vid] = n; time.sleep(0.8)
     state['hidden_counted'] = True                     # first run with hidden counts reads every video once
+    if not PROCESS_ONLY and CFG.get('followers', True):
+        for f in followers_tikwm(acc):
+            if f['unique_id'] == acc or f['unique_id'] in people or (f['uid'] and f['uid'] in people): continue
+            cid = 'follower-' + f['unique_id']
+            if cid in known: continue
+            new.append(dict(cid=cid, vid='', handle=f['unique_id'], nick=f['nickname'], text='', ts=int(time.time()), status='new', found=int(time.time()), uid=f['uid'], source='follower'))
+            known.add(cid); people.add(f['unique_id']); people.add(f['uid'])
     if 'TEST' in globals(): new.append(TEST)
     if '--clean-tests' in sys.argv:                     # remove every entry made by a test run
         n0 = len(state['requests']); state['requests'] = [e for e in state['requests'] if not e.get('test')]; log(f'removed {n0 - len(state["requests"])} test entries')
