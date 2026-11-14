@@ -63,7 +63,7 @@ if os.environ.get('HUMANIZE', '1') == '1':
         k_, v_ = kv.split('=', 1); HU.H_[k_] = float(v_)
     mt = json.load(open(f'{ld}/meta_d1.json'))
     P2, r2, k2, s2, l2 = HU.humanize(np.load(f'{ld}/path_d1.npy'), np.load(f'{ld}/widths_d1.npy'), json.load(open(f'{ld}/kinds_d1.json')),
-                                     np.load(f'{ld}/secs_d1.npy'), np.load(f'{ld}/lazy_d1.npy'), mt['px_per_unit'])
+                                     np.load(f'{ld}/secs_d1.npy'), np.load(f'{ld}/lazy_d1.npy'), mt['px_per_unit'], mt.get('quiet', 0.0))
     np.save(f'{ld}/path_d1.npy', P2); np.save(f'{ld}/widths_d1.npy', r2); json.dump(k2, open(f'{ld}/kinds_d1.json', 'w'))
     np.save(f'{ld}/secs_d1.npy', s2); np.save(f'{ld}/lazy_d1.npy', l2)
     st_ = np.hypot(*np.diff(P2 * mt['px_per_unit'], axis=0).T); print(f'humanized: {len(P2)} points, max step {st_.max():.1f}px', flush=True)

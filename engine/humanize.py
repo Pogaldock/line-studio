@@ -16,7 +16,7 @@ def gsmooth(x, s):
     if s <= 0 or len(x) < 5: return x
     return cv2.GaussianBlur(x.reshape(-1, 1).astype(np.float32), (1, 0), s, borderType=cv2.BORDER_REPLICATE).ravel()
 
-def humanize(P, r, kinds, secs, lazy, px_per_unit):
+def humanize(P, r, kinds, secs, lazy, px_per_unit, quiet=0.0):
     rng = np.random.default_rng(int(H_['seed']))
     Q = P * px_per_unit                                                     # work in drawing pixels
     # 1. drop repeated points, then remove tiny loops/spikes: a point is skipped when the path comes back within
@@ -44,7 +44,14 @@ def humanize(P, r, kinds, secs, lazy, px_per_unit):
     wav = gsmooth(rng.normal(0, 1, len(Qn)), H_['drift_wave'] / H_['step']); wav /= np.abs(wav).max() + 1e-9
     Qn = Qn + nrm * (wav * H_['drift'])[:, None]
     # 5. pressure: each stroke (run of non-join points) tapers in and out; slow width variation along the line
-    isj = np.array([k == 'walk' for k in kn]); run_id = np.cumsum(np.r_[True, isj[1:] != isj[:-1]])
+    isj = np.array([k == 'walk' for k in kn])
+    if quiet and isj.any() and (~isj).any():
+        # hairline joins (quiet_joins): joins are stored with few points, so the even resampling above would fade a
+        # line's full weight far into the join; pin every join point to the hairline, easing in over 6 px of drawn length
+        ix = np.arange(len(isj)); nl = np.where(~isj, ix, -10 ** 9); nr = np.where(~isj, ix, 10 ** 9)
+        d = np.minimum(ix - np.maximum.accumulate(nl), np.minimum.accumulate(nr[::-1])[::-1] - ix) * H_['step']
+        tq = np.clip(d / 6.0, 0, 1); rn = np.where(isj, rn * (1 - tq) + np.minimum(rn, quiet) * tq, rn)
+    run_id = np.cumsum(np.r_[True, isj[1:] != isj[:-1]])
     taper = np.ones(len(Qn)); L = H_['taper'] / H_['step']
     for rid in np.unique(run_id):
         ii = np.nonzero(run_id == rid)[0]

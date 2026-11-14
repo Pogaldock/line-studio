@@ -12,7 +12,7 @@ import hydrant_style as HS
 import route as RT                                       # route-optimised stroke order (route=0 turns it off)
 import depth as DP                                       # depth-aware selection + weight (depth=1 turns it on)
 
-E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0)
+E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0)
 _DENS = {}
 
 def density(ink):
@@ -197,6 +197,41 @@ def depth_weight(photo, outdir):
         r = np.load(f) * (1 - DP.D['depth_w'] / 2 + DP.D['depth_w'] * near)
         np.save(f, r.astype(np.float32))
 
+# ---------- merge (merge=<fraction of width>): kept strokes whose ends are within that distance and roughly continue
+# each other become one stroke (short straight bridge), so there are fewer separate strokes and so fewer joins.
+# Closest pairs first; a pair merges only if leaving one end and entering the other turns less than merge_turn degrees.
+def _end_dir(s, at_end):
+    q = s[-1] - s[max(0, len(s) - 8)] if at_end else s[0] - s[min(len(s) - 1, 7)]
+    return q / (np.hypot(*q) + 1e-9)                      # direction pointing OUT of the stroke at that end
+_sel_before_merge = HS.select
+def select_merge(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
+    keep = _sel_before_merge(strokes, level, U, W, H, inside, face, labels, lscale)
+    if not E['merge'] or len(keep) < 2: return keep
+    S = [np.asarray(k_[0], float) for k_ in keep]; O = [k_[1] for k_ in keep]; alive = [True] * len(S)
+    dmax = E['merge'] * W; cmin = math.cos(math.radians(E['merge_turn']))
+    while True:
+        best = None
+        for i in range(len(S)):
+            if not alive[i]: continue
+            for j in range(i + 1, len(S)):
+                if not alive[j]: continue
+                for ei in (0, 1):
+                    for ej in (0, 1):
+                        a = S[i][-1] if ei else S[i][0]; b = S[j][-1] if ej else S[j][0]; v = b - a; d = float(np.hypot(*v))
+                        if d > dmax: continue
+                        u = v / (d + 1e-9)
+                        if d > 2 and (_end_dir(S[i], ei) @ u < cmin or -_end_dir(S[j], ej) @ u < cmin): continue
+                        if best is None or d < best[0]: best = (d, i, j, ei, ej)
+        if best is None: break
+        _, i, j, ei, ej = best
+        A_ = S[i] if ei else S[i][::-1]; B_ = S[j] if not ej else S[j][::-1]          # A ends at the joint, B starts there
+        n = max(2, int(np.hypot(*(B_[0] - A_[-1])) / 1.5))
+        bridge = np.linspace(A_[-1], B_[0], n)[1:-1]
+        S[i] = np.vstack([A_, bridge, B_]) if len(bridge) else np.vstack([A_, B_]); alive[j] = False
+    out = [(S[i], O[i]) for i in range(len(S)) if alive[i]]
+    return out
+HS.select = select_merge
+
 def darkness_widths(photo, outdir):
     W = 900; ph = cv2.imread(photo); H = int(ph.shape[0] * W / ph.shape[1])
     g = cv2.cvtColor(cv2.resize(ph, (W, H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
@@ -206,10 +241,27 @@ def darkness_widths(photo, outdir):
         r = LP.widths(P, kinds); ix = np.clip(np.round(P).astype(int), 0, [W - 1, H - 1]); dk = dark[ix[:, 1], ix[:, 0]]
         lo, hi = np.percentile(dk, 5), np.percentile(dk, 95); dk = np.clip((dk - lo) / (hi - lo + 1e-6), 0, 1)
         f_ = 0.35 + 1.9 * dk ** 1.3; wk = np.array(kinds) == 'walk'; f_[wk] = np.clip(f_[wk], 0.55, 0.95)
-        if E['quiet_joins']: f_[wk] = E['quiet_joins']            # joins as a thin thread, whatever the photo's darkness
         r = (r * cv2.GaussianBlur(f_.reshape(-1, 1).astype(np.float32), (1, 0), 8).ravel()).astype(np.float32)
+        if E['quiet_joins'] and wk.any() and (~wk).any():
+            # joins as a hairline thread: quiet_joins x the median line width, applied AFTER the width smoothing (which
+            # otherwise hands short joins most of their neighbours' weight); a short taper where a join meets a line
+            hair = E['quiet_joins'] * float(np.median(r[~wk]))
+            # taper by drawn length (6 px), not by point count: joins are stored with sparse points
+            cum = np.r_[0, np.cumsum(np.hypot(*np.diff(P, axis=0).T))]
+            dist = np.full(len(r), 1e9); last = -1e9
+            for i in range(len(r)):
+                if not wk[i]: last = cum[i]
+                dist[i] = cum[i] - last
+            last = 1e9
+            for i in range(len(r) - 1, -1, -1):
+                if not wk[i]: last = cum[i]
+                dist[i] = min(dist[i], last - cum[i])
+            t = np.clip(dist / 6.0, 0, 1)
+            r = np.where(wk, r * (1 - t) + np.minimum(r, hair) * t, r).astype(np.float32)
         np.save(os.path.join(outdir, f'widths_d{dd}.npy'), r)
-        json.dump(dict(nib_scale=LP.P['nib_scale'], px_per_unit=W / 500.0), open(os.path.join(outdir, f'meta_d{dd}.json'), 'w'))
+        meta = dict(nib_scale=LP.P['nib_scale'], px_per_unit=W / 500.0)
+        if E['quiet_joins'] and wk.any() and (~wk).any(): meta['quiet'] = round(hair, 4)   # humanize keeps joins at this width
+        json.dump(meta, open(os.path.join(outdir, f'meta_d{dd}.json'), 'w'))
 
 if __name__ == '__main__':
     rest = []
