@@ -5,12 +5,14 @@
 #   selection     strokes lying on depth edges are kept down to depth_keep x the usual minimum length; strokes on
 #                 flat, unbroken surfaces (prints, texture) need depth_flat x the length. The total amount of line stays
 #                 the same (the style's own budget search still runs over this selection).
+#   shape         strokes on depth edges get depth_flow x the style's smoothing, so small shapes on an object's
+#                 outline (a far wheel, a fingertip) survive the loose flowing look instead of being rounded away
 #   weight        line width x (1 - depth_w/2 + depth_w x nearness): nearer is thicker, further is thinner
 # Model file: models/depth_anything_v2_small.onnx (onnx-community export, sha256 in models/models.txt).
 import os, numpy as np, cv2
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-D = dict(depth=0, depth_keep=0.4, depth_flat=1.4, depth_w=0.8, depth_edge=0.08)
+D = dict(depth=0, depth_keep=0.4, depth_flat=1.4, depth_w=0.8, depth_edge=0.08, depth_flow=0.35)
 _CACHE = {}
 
 def depth_map(img):
