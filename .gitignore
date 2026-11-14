@@ -5,3 +5,5 @@ engine/models/*.pt
 engine/models/*.pth
 engine/models/depth_anything_v2_small.onnx
 __pycache__/
+# Taste judge: trained on private labels (taste-data is private); never committed to this public repo
+engine/models/judge.onnx
