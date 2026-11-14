@@ -124,7 +124,9 @@ def contour(img): return _cache('contour', img, _contour)
 def _contour(img):
     import onnxruntime as ort
     f = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'id_contour_1024.onnx')
-    if 'contour' not in _SESS: _SESS['contour'] = ort.InferenceSession(f, providers=['CPUExecutionProvider'])
+    if 'contour' not in _SESS:
+        so = ort.SessionOptions(); so.enable_cpu_mem_arena = False      # no memory pool kept between pictures (it held ~5 GB)
+        _SESS['contour'] = ort.InferenceSession(f, so, providers=['CPUExecutionProvider'])
     s = _SESS['contour']
     src = SRC.get('full', img); h, w = src.shape[:2]; side = max(h, w)
     sq = np.full((side, side, 3), np.median(src.reshape(-1, 3), axis=0), np.uint8)   # pad to a square (no stretching)
