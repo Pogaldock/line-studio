@@ -12,7 +12,7 @@ import hydrant_style as HS
 import route as RT                                       # route-optimised stroke order (route=0 turns it off)
 import depth as DP                                       # depth-aware selection + weight (depth=1 turns it on)
 
-E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03)
+E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0)
 _DENS = {}
 
 def density(ink):
@@ -143,6 +143,14 @@ def select_depth(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
     RT.CTX['W'], RT.CTX['H'] = W, H
     if 'edges' not in _DEPTH or _DEPTH['edges'].shape != (H, W):
         d = cv2.resize(_DEPTH['d'], (W, H), interpolation=cv2.INTER_AREA); _DEPTH['edges'] = DP.depth_edges(d)
+        if DP.D['depth_relief']:                     # relative relief counts as outline too, and adds its own strokes
+            rl = DP.relief_lines(d); _DEPTH['edges'] = _DEPTH['edges'] | (cv2.dilate(rl.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)
+            have = np.zeros((H, W), np.uint8)
+            for s0 in strokes: cv2.polylines(have, [np.round(s0).astype(np.int32)], False, 1, 9)
+            rs = HS.chain_strokes(HS.strokes_from_contour(rl * (1 - have), 0.5))
+            _DEPTH['relief_strokes'] = [r for r in rs if len(r) > 6]
+            log_ = getattr(HS, 'log', print); log_(len(_DEPTH['relief_strokes']), 'relief strokes added from the depth map')
+    if DP.D['depth_relief']: strokes = list(strokes) + _DEPTH.get('relief_strokes', [])
     ed = _DEPTH['edges']; A = HS.A
     Lmin = A['Lmin'] * U * level * lscale; Lface = A['face_frac'] * A['Lmin'] * U * level; f = U / W; keep = []
     for s_ in strokes:
@@ -198,6 +206,7 @@ def darkness_widths(photo, outdir):
         r = LP.widths(P, kinds); ix = np.clip(np.round(P).astype(int), 0, [W - 1, H - 1]); dk = dark[ix[:, 1], ix[:, 0]]
         lo, hi = np.percentile(dk, 5), np.percentile(dk, 95); dk = np.clip((dk - lo) / (hi - lo + 1e-6), 0, 1)
         f_ = 0.35 + 1.9 * dk ** 1.3; wk = np.array(kinds) == 'walk'; f_[wk] = np.clip(f_[wk], 0.55, 0.95)
+        if E['quiet_joins']: f_[wk] = E['quiet_joins']            # joins as a thin thread, whatever the photo's darkness
         r = (r * cv2.GaussianBlur(f_.reshape(-1, 1).astype(np.float32), (1, 0), 8).ravel()).astype(np.float32)
         np.save(os.path.join(outdir, f'widths_d{dd}.npy'), r)
         json.dump(dict(nib_scale=LP.P['nib_scale'], px_per_unit=W / 500.0), open(os.path.join(outdir, f'meta_d{dd}.json'), 'w'))
