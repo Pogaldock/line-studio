@@ -106,7 +106,7 @@ def inbox(state, known, people):
                     if h and h == CFG['account']: continue
                     if h and h in people: log(f'  {c["nick"]}: already in the list as @{h}'); continue
                     thumb = base64.b64encode(cv2.imencode('.jpg', cv2.resize(c['avatar'], (64, 64)), [cv2.IMWRITE_JPEG_QUALITY, 80])[1]).decode() if c['avatar'] is not None else ''
-                    e = dict(cid=cid, vid='', handle=h or '', nick=c['nick'], text=c['text'][:300], ts=int(time.time()), found=int(time.time()), source='screenshot', test=n.startswith('shot_test'),
+                    e = dict(cid=cid, vid='', handle=h or '', nick=c['nick'], text=c['text'][:300], ts=int(time.time()), found=int(time.time()), source='follower' if c.get('follower') else 'screenshot', test=n.startswith('shot_test'),
                              status='new' if h else 'needs-name', reason='' if h else why, thumb=thumb)
                     log(f'  {c["nick"]}: {"@" + h if h else "needs a @name"} ({why})')
                     new.append(e); known.add(cid); people.add(h) if h else None
@@ -221,6 +221,10 @@ def main(dry=False):
         return
     for e in todo:
         try:
+            pf = profile(e['handle'])                     # learn their display name: later screenshots of them match at once
+            if pf and pf.get('nickname'):
+                hs = state.setdefault('names', {}).setdefault(SR._plain(pf['nickname']), [])
+                if e['handle'] not in hs: hs.append(e['handle'])
             url = big_avatar(e['handle']); r = url and http(url)
             im = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR) if r else None
             if im is None: e.update(status='skipped', reason='profile picture could not be loaded'); continue

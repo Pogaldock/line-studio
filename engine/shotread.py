@@ -1,4 +1,4 @@
-# Read TikTok comment screenshots (Nov 2026): every comment in the picture -> display name, text and the commenter's
+# Read TikTok comment screenshots and new-follower screenshots (Nov 2026): every comment (or follower) in the picture -> display name, text and the commenter's
 # avatar cut out of the screenshot (used to confirm their @name, never drawn: it is too small).
 #
 # How a comment looks in TikTok's comment sheet (any language, light or dark): a round avatar at the left, the display name
@@ -43,10 +43,27 @@ def avatar_left_of(img, line):
     x, y, w, hh, _ = best; s = max(w, hh)
     return img[y0 + y:y0 + y + s, x0 + x:x0 + x + s].copy()
 
+FOLLOW = re.compile(r'(started following|followed you|a commencé à (vous|te) suivre|s.est abonné|vous suit|te suit|empezó a seguirte|ha iniziato a seguirti)', re.I)
+
+def read_followers(img, lines):
+    # "New followers" / activity screenshots: a name line, then "started following you." under it; the avatar sits left
+    # of that text block (searched from the follow line's indent: a decorated name can start further right)
+    H, W = img.shape[:2]; out = []
+    for i, f in enumerate(lines):
+        if not FOLLOW.search(f['t']): continue
+        above = [l for l in lines[:i] if 0 < f['y0'] - l['y1'] < 0.06 * H and f['x0'] - 0.05 * W <= l['x0'] <= f['x0'] + 0.2 * W
+                 and not FOLLOW.search(l['t']) and not UI.match(l['t']) and not re.search(r'follow ?back|message|suivre|amis|friends', l['t'], re.I)]
+        if not above: continue
+        n = above[-1]; probe = dict(n, x0=min(n['x0'], f['x0']))
+        out.append(dict(nick=n['t'].strip(), text='', avatar=avatar_left_of(img, probe), y=int(n['y0']), follower=True))
+    return out
+
 def read(img):
     # -> list of {nick, text, avatar (BGR crop or None), y}. A comment = a name line, text lines at the same indent, then
     # the age / reply line at that indent. The avatar is optional (a dark picture on a dark sheet may not stand out).
     H, W = img.shape[:2]; lines = [l for l in ocr(img) if l['y0'] > 0.04 * H and l['c'] > 0.5]
+    fol = read_followers(img, lines)
+    if fol: return fol                                         # a followers screenshot, not a comment sheet
     out, i = [], 0
     while i < len(lines):
         l = lines[i]
@@ -86,12 +103,25 @@ def candidates(nick, known=None):
             if c and c not in out and re.fullmatch(r'[a-z0-9._]{2,24}', c): out.append(c)
     return out[:6]
 
-def similarity(a, b):
-    # normalised correlation of two avatars (colour, 40 px, inside the circle)
+def _sim(a, b):
     a = cv2.resize(a, (40, 40), interpolation=cv2.INTER_AREA).astype(np.float32); b = cv2.resize(b, (40, 40), interpolation=cv2.INTER_AREA).astype(np.float32)
     yy, xx = np.mgrid[:40, :40]; m = (yy - 19.5) ** 2 + (xx - 19.5) ** 2 < 17 ** 2
     a, b = a[m].ravel(), b[m].ravel(); a -= a.mean(); b -= b.mean()
     return float((a * b).sum() / (np.sqrt((a * a).sum() * (b * b).sum()) + 1e-6))
+
+def similarity(a, b):
+    # how alike two avatars are (normalised correlation, colour, inside the circle). The cut from a screenshot is not
+    # aligned with the profile picture (story rings, the circle's edge, rounding), so small zooms and shifts of the cut are
+    # tried and the best kept: the same picture scores ~0.8-0.95, a different one stays low.
+    best, n = -1.0, a.shape[0]
+    for z in (1.0, 0.92, 0.84, 0.76):
+        k = int(n * (1 - z) / 2); s = n - 2 * k
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                o = max(1, s // 30); y0, x0 = k + dy * o, k + dx * o
+                if y0 < 0 or x0 < 0 or y0 + s > n or x0 + s > n: continue
+                best = max(best, _sim(a[y0:y0 + s, x0:x0 + s], b))
+    return best
 
 def resolve(nick, avatar, profile, known=None):
     # profile(handle) -> dict(nickname, avatar BGR) or None (fetching is left to the caller). -> (handle or None, note)
@@ -100,6 +130,8 @@ def resolve(nick, avatar, profile, known=None):
         if not p: continue
         same_name = _plain(p['nickname']) == _plain(nick)
         sim = similarity(avatar, p['avatar']) if avatar is not None and p.get('avatar') is not None else None
-        if same_name and (sim is None or sim > 0.5): return h, f'name match{"" if sim is None else f", picture {sim:.2f}"}'
+        # thresholds from real screenshots (Nov 2026): the same account scored 0.44-0.65 with an identical display name,
+        # other accounts that share the name 0.13-0.35
+        if same_name and (sim is None or sim > 0.4): return h, f'name match{"" if sim is None else f", picture {sim:.2f}"}'
         if sim is not None and sim > 0.85: return h, f'picture {sim:.2f}'
     return None, 'no account found for this name'
