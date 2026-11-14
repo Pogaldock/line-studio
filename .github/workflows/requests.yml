@@ -62,4 +62,7 @@ jobs:
       - uses: ./.github/actions/setup
         with: { models: "true" }
       - name: read the inbox and draw
-        run: ~/venv/bin/python -u engine/requests_scan.py
+        env: { TI: "${{ inputs.test_inbox }}" }
+        run: |
+          if [ -n "$TI" ]; then [[ "$TI" =~ ^[A-Za-z0-9._]{2,30}$ ]] || exit 1; ~/venv/bin/python -u engine/requests_scan.py --test-inbox "$TI"
+          else ~/venv/bin/python -u engine/requests_scan.py; fi
