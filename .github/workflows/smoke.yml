@@ -1,6 +1,7 @@
 # Smoke test of the whole chain on a runner: reference check (does this machine draw the locked look exactly?),
-# then a real job: release job-smoke-<run> with a reference photo -> trace all options -> render option a with a caption.
-# Planned: setup 4 min cold, regress 1 min, trace 2 min, render 1.5 min. Limit 25 min.
+# then a real job: release job-smoke-<run> with a reference photo -> trace all options -> render option a with a caption
+# and a (synthetic) comment overlay.
+# Planned: setup 4 min cold, regress 1 min, trace 3 min (19 options), renders 2.5 min. Limit 25 min.
 name: smoke
 on: { workflow_dispatch: {} }
 permissions: { contents: write }
@@ -24,9 +25,18 @@ jobs:
         run: ~/venv/bin/python engine/studio.py trace photo.jpg.enc work --tag "$TAG"
       - name: pre-render option a
         run: ~/venv/bin/python engine/studio.py prerender work a --tag "$TAG"
-      - name: render a (caption pass on the master)
-        run: ~/venv/bin/python engine/studio.py render work a "doing lines again sorry" --tag "$TAG"
-      - name: render b at another speed (full render)
-        run: ~/venv/bin/python engine/studio.py render work b "i cant stop doing lines" --seconds 20 --tag "$TAG"
+      - name: synthetic comment crop (no real comment, the repo is public), sealed and uploaded like the phone does
+        run: |
+          ~/venv/bin/python - <<'PY'
+          import sys; sys.path.insert(0, 'engine'); import numpy as np, cv2, studio
+          im = np.full((420, 1080, 3), (38, 34, 30), np.uint8); cv2.circle(im, (90, 90), 50, (90, 90, 220), -1)
+          cv2.putText(im, 'smoketest', (170, 80), 0, 1.4, (170, 170, 170), 2); cv2.putText(im, 'ma pp stp', (170, 150), 0, 1.8, (240, 240, 240), 3)
+          cv2.imwrite('work/comment_smoke.png', im); studio.seal('work/comment_smoke.png')
+          PY
+          gh release upload "$TAG" work/comment_smoke.png.enc --clobber
+      - name: render a with the comment (caption + comment pass on the master)
+        run: ~/venv/bin/python engine/studio.py render work a "drawing a random commenter's pfp" --comment comment_smoke.png.enc --cstyle bottom-m-out --tag "$TAG"
+      - name: render b at another speed with the comment (master drawn first, then the same pass)
+        run: ~/venv/bin/python engine/studio.py render work b "i cant stop doing lines" --seconds 20 --comment comment_smoke.png.enc --cstyle top-s-stay --tag "$TAG"
       - name: result
         run: gh release view "$TAG" --json assets -q '.assets[]|"\(.name) \(.size)"'
