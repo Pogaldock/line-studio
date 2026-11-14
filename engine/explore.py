@@ -12,7 +12,7 @@ import hydrant_style as HS
 import route as RT                                       # route-optimised stroke order (route=0 turns it off)
 import depth as DP                                       # depth-aware selection + weight (depth=1 turns it on)
 
-E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0, wobble=0.0, wobble_face=1, wobble_long=0.0, avoid_face=0.0)
+E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0, wobble=0.0, wobble_face=1, wobble_long=0.0, avoid_face=0.0, fuse=0.0, fuse_flow=1.0)
 _DENS = {}
 _FACE = {}                                    # face map of the current photo (set by select, read by travel)
 
@@ -248,10 +248,33 @@ def turning(s):
     if len(q) < 4: return 99.0
     a = np.arctan2(*np.diff(q, axis=0).T[::-1]); da = np.abs((np.diff(a) + np.pi) % (2 * np.pi) - np.pi)
     return float(da.sum() / (L / 10.0))
+# ---------- fuse (fuse=<band width as a fraction of the frame width>): the line model often traces one real contour (a
+# glasses rim) as several overlapping, parallel or end-to-end fragments, each then drawn as its own stroke with joins
+# between them. Stroke consolidation (as in StrokeAggregator, Liu et al. 2018, in a simple raster form): all kept
+# strokes are painted as a band fuse x W wide, so fragments lying on the same curve melt into one shape; its centre
+# line is traced, chained through junctions where directions agree, and smoothed (fuse_flow x the style's smoothing)
+# into one flowing stroke. Lines further apart than the band (two lips, two rims) stay separate.
+def fuse(keep, level, U, W, H, labels):
+    if not keep: return keep
+    w = max(3, int(round(E['fuse'] * W)))
+    band = np.zeros((H, W), np.uint8)
+    for k_ in keep: cv2.polylines(band, [np.round(k_[0]).astype(np.int32)], False, 1, w, cv2.LINE_8)
+    n_, lab_, st_, _ = cv2.connectedComponentsWithStats((1 - band).astype(np.uint8), connectivity=4)
+    small = np.nonzero(st_[:, cv2.CC_STAT_AREA] < (2 * w) ** 2)[0]      # pinholes inside the band -> no tiny rings
+    band[np.isin(lab_, small[small > 0])] = 1
+    tr = HS.chain_strokes(HS.strokes_from_contour(band.astype(np.float32), 0.5), gap_max=max(6, w))
+    f = U / W; sig = E['fuse_flow'] * HS.A['flow'] * level * f; out = []
+    for t in tr:
+        if LP.arclen(t) < 2 * w: continue                       # knots left at junctions
+        mid = np.clip(np.round(t[len(t) // 2]).astype(int), 0, [W - 1, H - 1])
+        out.append((HS.flow(t, sig) if sig > 0 else t, int(labels[mid[1], mid[0]]) if labels is not None else 0))
+    return out
+
 _sel_before_wobble = HS.select
 def select_wobble(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
     _FACE['m'] = face.astype(np.float32) if face is not None else np.zeros((H, W), np.float32)
     keep = _sel_before_wobble(strokes, level, U, W, H, inside, face, labels, lscale)
+    if E['fuse']: keep = fuse(keep, level, U, W, H, labels)
     if not E['wobble']: return keep
     out = []
     for k_ in keep:
