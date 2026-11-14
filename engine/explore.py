@@ -12,7 +12,7 @@ import hydrant_style as HS
 import route as RT                                       # route-optimised stroke order (route=0 turns it off)
 import depth as DP                                       # depth-aware selection + weight (depth=1 turns it on)
 
-E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0, wobble=0.0, wobble_face=1, wobble_long=0.0, avoid_face=0.0, fuse=0.0, fuse_flow=1.0)
+E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0, wobble=0.0, wobble_face=1, wobble_long=0.0, avoid_face=0.0, fuse=0.0, fuse_flow=1.0, fuse_overlap=0.5)
 _DENS = {}
 _FACE = {}                                    # face map of the current photo (set by select, read by travel)
 
@@ -249,26 +249,54 @@ def turning(s):
     a = np.arctan2(*np.diff(q, axis=0).T[::-1]); da = np.abs((np.diff(a) + np.pi) % (2 * np.pi) - np.pi)
     return float(da.sum() / (L / 10.0))
 # ---------- fuse (fuse=<band width as a fraction of the frame width>): the line model often traces one real contour (a
-# glasses rim) as several overlapping, parallel or end-to-end fragments, each then drawn as its own stroke with joins
+# glasses rim) as several overlapping or parallel fragments, each then drawn as its own stroke with joins
 # between them. Stroke consolidation (as in StrokeAggregator, Liu et al. 2018, in a simple raster form): all kept
-# strokes are painted as a band fuse x W wide, so fragments lying on the same curve melt into one shape; its centre
+# strokes that run alongside each other (see fuse()) are painted as one band, so they melt into one shape; its centre
 # line is traced, chained through junctions where directions agree, and smoothed (fuse_flow x the style's smoothing)
 # into one flowing stroke. Lines further apart than the band (two lips, two rims) stay separate.
+def _tangents(s):
+    g = np.gradient(np.asarray(s, float), axis=0); return g / (np.hypot(*g.T)[:, None] + 1e-9)
+
 def fuse(keep, level, U, W, H, labels):
-    if not keep: return keep
-    w = max(3, int(round(E['fuse'] * W)))
-    band = np.zeros((H, W), np.uint8)
-    for k_ in keep: cv2.polylines(band, [np.round(k_[0]).astype(np.int32)], False, 1, w, cv2.LINE_8)
-    n_, lab_, st_, _ = cv2.connectedComponentsWithStats((1 - band).astype(np.uint8), connectivity=4)
-    small = np.nonzero(st_[:, cv2.CC_STAT_AREA] < (2 * w) ** 2)[0]      # pinholes inside the band -> no tiny rings
-    band[np.isin(lab_, small[small > 0])] = 1
-    tr = HS.chain_strokes(HS.strokes_from_contour(band.astype(np.float32), 0.5), gap_max=max(6, w))
-    f = U / W; sig = E['fuse_flow'] * HS.A['flow'] * level * f; out = []
-    for t in tr:
-        if LP.arclen(t) < 2 * w: continue                       # knots left at junctions
-        mid = np.clip(np.round(t[len(t) // 2]).astype(int), 0, [W - 1, H - 1])
-        out.append((HS.flow(t, sig) if sig > 0 else t, int(labels[mid[1], mid[0]]) if labels is not None else 0))
+    # only true duplicates are fused: stroke i joins stroke j's group when at least fuse_overlap of i's length runs
+    # within the band of j in the same direction (within 30 degrees). The band scales with the subject (fuse x U), so a
+    # small figure's close details stay apart. Each group is then melted into one line; other strokes are left as they are.
+    if len(keep) < 2: return keep
+    from scipy.spatial import cKDTree
+    w = max(3.0, E['fuse'] * U)
+    S = [np.asarray(k_[0], float) for k_ in keep]
+    pts = np.vstack([s_[::2] for s_ in S]); tg = np.vstack([_tangents(s_)[::2] for s_ in S])
+    sid = np.concatenate([np.full(len(s_[::2]), i) for i, s_ in enumerate(S)]); tree = cKDTree(pts)
+    parent = list(range(len(S)))
+    def root(i):
+        while parent[i] != i: parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    cos30 = math.cos(math.radians(30))
+    for i, s_ in enumerate(S):
+        mine = np.nonzero(sid == i)[0]
+        if len(mine) < 3: continue
+        hits = {}
+        for a_, nb in zip(mine, tree.query_ball_point(pts[mine], w)):
+            for j in {int(sid[q]) for q in nb if sid[q] != i and abs(tg[q] @ tg[a_]) > cos30}: hits[j] = hits.get(j, 0) + 1
+        for j, c in hits.items():
+            if c / len(mine) >= E['fuse_overlap']: parent[root(i)] = root(j)
+    groups = {}
+    for i in range(len(S)): groups.setdefault(root(i), []).append(i)
+    f = U / W; sig = E['fuse_flow'] * HS.A['flow'] * level * f; wi = int(round(w)); out = []; nf = 0
+    for g in groups.values():
+        if len(g) == 1: out.append(keep[g[0]]); continue
+        band = np.zeros((H, W), np.uint8)
+        for i in g: cv2.polylines(band, [np.round(S[i]).astype(np.int32)], False, 1, wi, cv2.LINE_8)
+        n_, lab_, st_, _ = cv2.connectedComponentsWithStats((1 - band).astype(np.uint8), connectivity=4)
+        small = np.nonzero(st_[:, cv2.CC_STAT_AREA] < (2 * wi) ** 2)[0]          # pinholes -> no tiny rings
+        band[np.isin(lab_, small[small > 0])] = 1
+        for t in HS.chain_strokes(HS.strokes_from_contour(band.astype(np.float32), 0.5), gap_max=max(6, wi)):
+            if LP.arclen(t) < 2 * w: continue
+            mid = np.clip(np.round(t[len(t) // 2]).astype(int), 0, [W - 1, H - 1])
+            out.append((HS.flow(t, sig) if sig > 0 else t, int(labels[mid[1], mid[0]]) if labels is not None else 0)); nf += 1
+    _FUSE['last'] = (len(keep), sum(len(g) for g in groups.values() if len(g) > 1), nf)
     return out
+_FUSE = {}
 
 _sel_before_wobble = HS.select
 def select_wobble(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
