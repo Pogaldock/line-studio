@@ -25,8 +25,8 @@ jobs:
       - name: trace options
         run: ~/venv/bin/python engine/studio.py trace in/photo.jpg.enc work --tag "$TAG"
       - id: opts
-        # pre-render groups: 2 options per runner (runners are free on a public repo, but only 20 run at once account-wide)
-        run: echo "opts=$(python3 -c "import json;i=[o['id'] for o in json.load(open('engine/options.json'))['options']];print(json.dumps([','.join(i[k:k+2]) for k in range(0,len(i),2)]))")" >> "$GITHUB_OUTPUT"
+        # pre-render groups: at most 6 runners per photo (free on a public repo, but only 20 run at once account-wide)
+        run: echo "opts=$(python3 -c "import json,math;i=[o['id'] for o in json.load(open('engine/options.json'))['options']];g=math.ceil(len(i)/6);print(json.dumps([','.join(i[k:k+g]) for k in range(0,len(i),g)]))")" >> "$GITHUB_OUTPUT"
       - name: report failure
         if: failure()
         run: |

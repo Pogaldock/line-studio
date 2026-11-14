@@ -121,6 +121,27 @@ def select_depth(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
             obj = int(labels[mid[1], mid[0]]) if labels is not None else 0
             fl = (A['flow_face'] if inface else A['flow']) * (DP.D['depth_flow'] if cov > DP.D['depth_shape_cov'] else 1.0)
             keep.append((HS.flow(s_, fl * level * f) if fl > 0 else s_.astype(float), obj))
+    if DP.D['depth_gap']:                       # depth outlines nothing covers yet: added, lightly smoothed
+        if 'gaps' not in _DEPTH or _DEPTH['gaps'][0] != (H, W):
+            dc = DP.depth_curves(cv2.resize(_DEPTH['d'], (W, H), interpolation=cv2.INTER_AREA), DP.D['depth_gap_canny'])
+            _DEPTH['gaps'] = ((H, W), HS.chain_strokes(HS.strokes_from_contour(dc, 0.5)))
+        cover = np.zeros((H, W), np.uint8)
+        for k_, _ in keep: cv2.polylines(cover, [np.round(k_).astype(np.int32)], False, 1, 11)
+        gmin = DP.D['depth_gap_min'] * Lmin
+        for c_ in _DEPTH['gaps'][1]:
+            ix = np.clip(np.round(c_).astype(int), 0, [W - 1, H - 1])
+            free = (cover[ix[:, 1], ix[:, 0]] == 0) & inside[ix[:, 1], ix[:, 0]]
+            k0 = None
+            for i_ in range(len(free) + 1):                     # runs of uncovered points become strokes
+                if i_ < len(free) and free[i_]:
+                    if k0 is None: k0 = i_
+                elif k0 is not None:
+                    run = c_[k0:i_]
+                    if len(run) > 3 and LP.arclen(run) >= gmin:
+                        mid = ix[(k0 + i_) // 2]; obj = int(labels[mid[1], mid[0]]) if labels is not None else 0
+                        keep.append((HS.flow(run, max(DP.D['depth_flow'], 0.05) * A['flow'] * level * f), obj))
+                        cv2.polylines(cover, [np.round(run).astype(np.int32)], False, 1, 11)
+                    k0 = None
     return keep
 HS.select = select_depth
 _DEPTH = {}

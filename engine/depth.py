@@ -7,12 +7,14 @@
 #                 the same (the style's own budget search still runs over this selection).
 #   shape         strokes with more than depth_shape_cov of their length on depth edges get depth_flow x the style's smoothing, so small shapes on an object's
 #                 outline (a far wheel, a fingertip) survive the loose flowing look instead of being rounded away
+#   gaps          (depth_gap=1) outlines traced straight from the depth map wherever no kept line already covers them
+#                 (a far wheel sticking out of a board's silhouette): runs at least depth_gap_min x the minimum length
 #   weight        line width x (1 - depth_w/2 + depth_w x nearness): nearer is thicker, further is thinner
 # Model file: models/depth_anything_v2_small.onnx (onnx-community export, sha256 in models/models.txt).
 import os, numpy as np, cv2
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-D = dict(depth=0, depth_keep=0.4, depth_flat=1.4, depth_w=0.8, depth_edge=0.08, depth_flow=0.35, depth_shape_cov=0.5)
+D = dict(depth=0, depth_keep=0.4, depth_flat=1.4, depth_w=0.8, depth_edge=0.08, depth_flow=0.35, depth_shape_cov=0.5, depth_gap=0, depth_gap_min=0.15, depth_gap_canny=12)
 _CACHE = {}
 
 def depth_map(img):
@@ -40,3 +42,8 @@ def depth_edges(d):
     t = np.quantile(m, 1 - D['depth_edge'])
     e = (m >= t).astype(np.uint8)
     return cv2.dilate(e, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))) > 0
+
+def depth_curves(d, canny):
+    # thin outline curves of the depth map itself (Canny on the depth image), as a 0/1 map for the stroke tracer
+    g = (cv2.GaussianBlur(d, (0, 0), 1.0) * 255).astype(np.uint8)
+    return (cv2.Canny(g, canny, canny * 2.5) > 0).astype(np.float32)
