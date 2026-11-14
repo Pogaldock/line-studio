@@ -205,45 +205,48 @@ def caption_png(text, path):
     cv2.imwrite(path, cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)); return path
 
 # ---------- comment overlay (optional): a cropped comment screenshot floating over the video ----------
-# style = "<pos>-<size>-<fade>": pos top|mid|bottom (centre height 30 / 50 / 66 % of the frame, clear of the caption and
-# of TikTok's bottom bar), size s|m|l (62 / 74 / 86 % of the frame width), fade stay|out (fades out over the last 25 %
-# so the finished drawing ends clean). The card gets rounded corners and a soft shadow, fades in at 0.3 s and bobs
-# 10 px up and down every 3.2 s.
-CPOS = dict(top=0.30, mid=0.50, bottom=0.66); CSIZE = dict(s=0.62, m=0.74, l=0.86)
+# style = "<pos>-<size>-<fade>[-<align>]": pos top|mid|bottom (card centre at 30 / 50 / 70 % of the frame height, clear of
+# the caption and of TikTok's bottom bar), size s|m|l (a thumbnail: 30 / 40 / 52 % of the frame width), fade stay|out
+# (fades out over the last 25 % so the finished drawing ends clean), align left|center|right (5 % margin at the sides).
+# The card gets rounded corners and a soft shadow, fades in at 0.3 s and bobs 8 px up and down every 3.2 s.
+CPOS = dict(top=0.30, mid=0.50, bottom=0.70); CSIZE = dict(s=0.30, m=0.40, l=0.52); CALIGN = ('left', 'center', 'right')
 def parse_cstyle(st):
-    p = (st or 'bottom-m-stay').split('-') + ['', '', '']
-    return (p[0] if p[0] in CPOS else 'bottom', p[1] if p[1] in CSIZE else 'm', p[2] if p[2] in ('stay', 'out') else 'stay')
+    p = (st or 'bottom-s-out-left').split('-') + ['', '', '', '']
+    return (p[0] if p[0] in CPOS else 'bottom', p[1] if p[1] in CSIZE else 's', p[2] if p[2] in ('stay', 'out') else 'out',
+            p[3] if p[3] in CALIGN else 'center')
 
 def comment_card(src, out, style, W=1080, H=1920):
-    pos, size, _ = parse_cstyle(style)
+    pos, size, _, align = parse_cstyle(style)
     im = cv2.imread(src, cv2.IMREAD_COLOR)
     if im is None: raise RuntimeError('comment image could not be read')
     cw = int(W * CSIZE[size]); ch = max(1, int(im.shape[0] * cw / im.shape[1]))
-    if ch > 0.42 * H: ch = int(0.42 * H); cw = int(im.shape[1] * ch / im.shape[0])     # very tall crops: limit height
+    if ch > 0.30 * H: ch = int(0.30 * H); cw = int(im.shape[1] * ch / im.shape[0])     # very tall crops: limit height
     im = cv2.resize(im, (cw, ch), interpolation=cv2.INTER_AREA)
-    pad = 36; r = max(18, int(cw * 0.035))
+    pad = 24; r = max(10, int(cw * 0.045))
     card = np.zeros((ch + 2 * pad, cw + 2 * pad, 4), np.uint8)
     mask = np.zeros((ch, cw), np.uint8)
     cv2.rectangle(mask, (r, 0), (cw - r, ch), 255, -1); cv2.rectangle(mask, (0, r), (cw, ch - r), 255, -1)
     for cx, cy in ((r, r), (cw - r - 1, r), (r, ch - r - 1), (cw - r - 1, ch - r - 1)): cv2.circle(mask, (cx, cy), r, 255, -1, cv2.LINE_AA)
-    sh = np.zeros(card.shape[:2], np.float32); sh[pad + 10:pad + 10 + ch, pad:pad + cw] = mask / 255.0
-    sh = cv2.GaussianBlur(sh, (0, 0), 14) * 0.55                                       # soft drop shadow
+    sh = np.zeros(card.shape[:2], np.float32); sh[pad + 6:pad + 6 + ch, pad:pad + cw] = mask / 255.0
+    sh = cv2.GaussianBlur(sh, (0, 0), 9) * 0.5                                         # soft drop shadow
     card[:, :, 3] = (sh * 255).astype(np.uint8)
     a = mask[:, :, None] / 255.0; reg = card[pad:pad + ch, pad:pad + cw]
     reg[:, :, :3] = (im * a).astype(np.uint8); reg[:, :, 3] = np.maximum(reg[:, :, 3], mask)
     cv2.imwrite(out, card)
-    y = int(CPOS[pos] * H - card.shape[0] / 2)
-    return out, int(np.clip(y, int(0.16 * H), int(0.80 * H) - card.shape[0]))
+    y = int(np.clip(int(CPOS[pos] * H - card.shape[0] / 2), int(0.16 * H), int(0.82 * H) - card.shape[0]))
+    m = int(0.05 * W) - pad
+    x = m if align == 'left' else W - card.shape[1] - m if align == 'right' else (W - card.shape[1]) // 2
+    return out, x, y
 
 def overlay_pass(raw, capf, final, seconds, pr, comment=None, cstyle=''):
     # one encode: caption (static) + optional comment card (fade in, gentle bob, optional fade out)
     ins = ['-i', raw, '-i', capf]; fc = '[0][1]overlay=0:0'
     if comment:
-        card, y = comment_card(comment, os.path.splitext(capf)[0] + '_comment.png', cstyle)
+        card, x, y = comment_card(comment, os.path.splitext(capf)[0] + '_comment.png', cstyle)
         dur = float(seconds) + 4; fade = 'fade=t=in:st=0.3:d=0.5:alpha=1'
         if parse_cstyle(cstyle)[2] == 'out': fade += f',fade=t=out:st={0.75 * dur:.2f}:d=0.8:alpha=1'
         ins += ['-loop', '1', '-t', f'{dur:.2f}', '-i', card]
-        fc += f'[v];[2]format=rgba,{fade}[c];[v][c]overlay=x=(W-w)/2:y={y}+10*sin(2*PI*t/3.2):shortest=1'
+        fc += f'[v];[2]format=rgba,{fade}[c];[v][c]overlay=x={x}:y={y}+8*sin(2*PI*t/3.2):shortest=1'
     p = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', *ins, '-filter_complex', fc, '-c:v', 'libx264', '-preset', 'veryfast',
                           '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-progress', 'pipe:1', final], stdout=subprocess.PIPE, text=True)
     total_us = float(seconds + 4) * 1e6
