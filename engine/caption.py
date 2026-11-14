@@ -25,13 +25,13 @@ def pick(name, sel=None):
 
 def caption_rgba(text, W, H):
     # text block ~78% of the frame width, top 9% of the frame (clear of TikTok's own top bar). A second part after a
-    # line break ("caption\ncall to action") is set smaller under it; then the block starts at 7.5% so both stay above
-    # 20% of the frame, where the finished drawing's safe area begins (video.py SAFE).
+    # line break ("caption\ncall to action") is set smaller under it, the whole block a size smaller and starting at 12%
+    # (under TikTok's header); it still ends above 20% of the frame, where the drawing's safe area begins (video.py SAFE).
     main, _, sub = text.partition('\n')
-    size = int(W * 0.052); font = ImageFont.truetype(FONT, size)
+    size = int(W * (0.044 if sub.strip() else 0.052)); font = ImageFont.truetype(FONT, size)   # two-part captions: a size smaller
     img = Image.new('RGBA', (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(img)
-    y = int(H * (0.075 if sub.strip() else 0.09))
-    for txt, sz, wrap in ((main, size, 24), (sub.strip(), int(size * 0.62), 40)):
+    y = int(H * (0.12 if sub.strip() else 0.09))      # two-part: below TikTok's Following / For You header
+    for txt, sz, wrap in ((main, size, 36), (sub.strip(), int(size * 0.66), 40)):
         if not txt: continue
         f = font if sz == size else ImageFont.truetype(FONT, sz); stroke = max(3, sz // 9)
         for ln in textwrap.wrap(txt, width=wrap):
