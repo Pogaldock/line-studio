@@ -12,8 +12,9 @@ import hydrant_style as HS
 import route as RT                                       # route-optimised stroke order (route=0 turns it off)
 import depth as DP                                       # depth-aware selection + weight (depth=1 turns it on)
 
-E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0)
+E = dict(avoid=1, bows='0.25,0.5,0.8', walk_tries=5, len_cost=0.15, dens_sigma=10.0, margin=0.03, quiet_joins=0.0, merge=0.0, merge_turn=70.0, wobble=0.0, wobble_face=1, wobble_long=0.0, avoid_face=0.0)
 _DENS = {}
+_FACE = {}                                    # face map of the current photo (set by select, read by travel)
 
 def density(ink):
     key = id(ink)
@@ -72,7 +73,7 @@ _orig_travel = HS.travel
 def travel_around(a, b, din, dout, W, H, rng, ink=None):
     if not E['avoid'] or ink is None: return _orig_travel(a, b, din, dout, W, H, rng, ink)
     d = float(np.hypot(*(b - a)))
-    if d < HS.A['hop'] * W: return _orig_travel(a, b, din, dout, W, H, rng, ink)
+    if d < HS.A['hop'] * W and not E['avoid_face']: return _orig_travel(a, b, din, dout, W, H, rng, ink)
     dens = density(ink); mg = E['margin'] * min(W, H)
     cands = [_orig_travel(a, b, din, dout, W, H, rng, ink)[0]]
     for lo, hi in ((1.05, 1.5), (1.3, 2.0), (1.6, 2.6)):
@@ -88,6 +89,8 @@ def travel_around(a, b, din, dout, W, H, rng, ink=None):
         ix = np.clip(np.round(c).astype(int), 0, [W - 1, H - 1])
         L = float(np.hypot(*np.diff(c, axis=0).T).sum())
         cost = float(dens[ix[:, 1], ix[:, 0]].mean()) + E['len_cost'] * (L / max(d, 1.0) - 1)
+        if E['avoid_face'] and 'm' in _FACE and _FACE['m'].shape == (H, W):     # joins pay for every point on the face
+            cost += E['avoid_face'] * float(_FACE['m'][ix[:, 1], ix[:, 0]].mean())
         if cost < bc: best, bc = c, cost
     return (best, None) if best is not None else _orig_travel(a, b, din, dout, W, H, rng, ink)
 HS.travel = travel_around
@@ -231,6 +234,34 @@ def select_merge(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
     out = [(S[i], O[i]) for i in range(len(S)) if alive[i]]
     return out
 HS.select = select_merge
+
+# ---------- wobble (wobble=<max turning, radians per 10 px>): scribbly strokes dropped. Turning is measured on the kept
+# (already smoothed) stroke resampled every 3 px; a clean contour (a glasses rim, a jaw) turns ~0.1-0.3 rad per 10 px,
+# beard and skin-texture pieces far more. wobble_face=1: only strokes in the face (face/hand map, or the whole subject
+# when the photo is a close-up and no face box covers it); wobble_long=<fraction of width>: strokes at least that long
+# always stay. The style's budget search still runs over the result.
+def turning(s):
+    s = np.asarray(s, float); L = LP.arclen(s)
+    if L < 6: return 99.0
+    seg = np.hypot(*np.diff(s, axis=0).T); c = np.r_[0, np.cumsum(seg)]; t = np.arange(0, c[-1], 3.0)
+    q = np.c_[np.interp(t, c, s[:, 0]), np.interp(t, c, s[:, 1])]
+    if len(q) < 4: return 99.0
+    a = np.arctan2(*np.diff(q, axis=0).T[::-1]); da = np.abs((np.diff(a) + np.pi) % (2 * np.pi) - np.pi)
+    return float(da.sum() / (L / 10.0))
+_sel_before_wobble = HS.select
+def select_wobble(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
+    _FACE['m'] = face.astype(np.float32) if face is not None else np.zeros((H, W), np.float32)
+    keep = _sel_before_wobble(strokes, level, U, W, H, inside, face, labels, lscale)
+    if not E['wobble']: return keep
+    out = []
+    for k_ in keep:
+        ix = np.clip(np.round(k_[0]).astype(int), 0, [W - 1, H - 1])
+        onface = (not E['wobble_face']) or face is None or not face.any() or face[ix[:, 1], ix[:, 0]].mean() > 0.5
+        long_ = E['wobble_long'] and LP.arclen(k_[0]) >= E['wobble_long'] * W     # long strokes (a glasses rim) always stay
+        if onface and not long_ and turning(k_[0]) > E['wobble']: continue
+        out.append(k_)
+    return out
+HS.select = select_wobble
 
 def darkness_widths(photo, outdir):
     W = 900; ph = cv2.imread(photo); H = int(ph.shape[0] * W / ph.shape[1])
