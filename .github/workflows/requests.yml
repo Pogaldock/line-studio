@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       test_account: { description: "optional: also process this account's picture as a request (end-to-end test)", required: false, default: "" }
+      redo: { description: "process every request not marked posted again (after a change to the look)", type: boolean, default: false }
 permissions: { contents: write }
 concurrency: { group: requests, cancel-in-progress: false }
 jobs:
@@ -24,9 +25,9 @@ jobs:
       - name: state release
         run: gh release view requests > /dev/null 2>&1 || gh release create requests --title requests --prerelease --notes "request list state (encrypted)"
       - name: scan and process
-        env: { TEST: "${{ inputs.test_account }}" }
+        env: { TEST: "${{ inputs.test_account }}", REDO: "${{ inputs.redo && '--redo' || '' }}" }
         run: |
           if [ -n "$TEST" ]; then
             [[ "$TEST" =~ ^[A-Za-z0-9._]{2,30}$ ]] || { echo "bad account name"; exit 1; }
             ~/venv/bin/python -u engine/requests_scan.py --test "$TEST" "draw me pls"
-          else ~/venv/bin/python -u engine/requests_scan.py; fi
+          else ~/venv/bin/python -u engine/requests_scan.py $REDO; fi

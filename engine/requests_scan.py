@@ -9,7 +9,8 @@
 #   posted.json.enc     written only by the phone page: {"posted": [cid, ...]}
 #   each request's job is an ordinary release job-<id> (named "request", nothing personal in clear text), so the phone's
 #   job view, other options and re-renders work as for any photo.
-# Usage: python3 requests_scan.py [--dry] [--test <account> "<text>"]
+# Usage: python3 requests_scan.py [--dry] [--redo] [--test <account> "<text>"]
+#   --redo: process every request not marked posted again (after a change to the look), removing test entries
 #   --dry: list the requests found, process nothing; --test: add that account as a request (end-to-end test)
 import os, sys, re, json, time, base64, subprocess, unicodedata, uuid, datetime, numpy as np, cv2
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -75,19 +76,21 @@ def card(avatar, handle, text, path):
         f = '/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf' % ('-Bold' if bold else '')
         return ImageFont.truetype(f, size) if os.path.exists(f) else ImageFont.load_default(size)
     text = ''.join(c for c in text if ord(c) < 0x2190 or 0x3000 <= ord(c) < 0xFFF0).strip() or '...'   # emoji the font lacks
-    W, pad, av = 1000, 34, 104; fh, ft = font(True, 34), font(False, 42)
+    W, pad, av = 860, 30, 112; fh, ft = font(True, 40), font(False, 58)          # big text: the card is shown small
     words, lines, cur = text.split(), [], ''
     for w in words:
         t = (cur + ' ' + w).strip()
         if ImageDraw.Draw(Image.new('RGB', (1, 1))).textlength(t, font=ft) > W - 3 * pad - av and cur: lines.append(cur); cur = w
         else: cur = t
     lines = (lines + [cur])[:3]
-    H = max(av + 2 * pad, pad + 48 + 54 * len(lines) + pad)
+    meas = ImageDraw.Draw(Image.new('RGB', (1, 1)))           # card as wide as its text: a short comment stays big on screen
+    W = int(min(W, max(420, 3 * pad + av + max([meas.textlength(handle, font=fh)] + [meas.textlength(l, font=ft) for l in lines]))))
+    H = max(av + 2 * pad, pad + 54 + 70 * len(lines) + pad)
     im = Image.new('RGB', (W, H), (31, 41, 46)); d = ImageDraw.Draw(im)
     a = Image.fromarray(cv2.cvtColor(cv2.resize(avatar, (av, av), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB))
     m = Image.new('L', (av, av), 0); ImageDraw.Draw(m).ellipse((0, 0, av - 1, av - 1), fill=255); im.paste(a, (pad, pad), m)
     x = pad * 2 + av; d.text((x, pad), handle, font=fh, fill=(160, 166, 172))
-    for i, l in enumerate(lines): d.text((x, pad + 48 + 54 * i), l, font=ft, fill=(240, 240, 240))
+    for i, l in enumerate(lines): d.text((x, pad + 54 + 70 * i), l, font=ft, fill=(240, 240, 240))
     im.save(path); return path
 
 # ---------- one request -> ready video ----------
@@ -126,6 +129,11 @@ def main(dry=False):
     if dry:
         for e in new: log('request:', e['text'][:80])
         return
+    if REDO:                                            # --redo: drop test entries, process every unposted request again
+        posted = set((load('posted.json.enc', {}) or {}).get('posted', []))
+        state['requests'] = [e for e in state['requests'] if not e.get('test')]
+        for e in state['requests']:
+            if e['cid'] not in posted: e.update(status='new', reason='', job='', rid='')
     state['requests'] += new; save(state)
     todo = [e for e in state['requests'] if e['status'] == 'new'][:int(CFG['max_per_run'])]
     for e in todo:
@@ -145,6 +153,7 @@ def main(dry=False):
             e.update(status='failed', reason=str(ex)[-200:]); log('failed:', ex)
         finally: save(state)
 
+REDO = '--redo' in sys.argv
 if __name__ == '__main__':
     # --test <account> "<text>": also treat that account as having commented <text> (an end-to-end test on a known picture)
     if '--test' in sys.argv:
