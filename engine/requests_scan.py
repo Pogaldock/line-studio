@@ -35,10 +35,26 @@ def http(url, **kw):
     return None
 
 def videos(acc):
+    # {video id: (comment count, description)}; the descriptions say who has been drawn already ("@name custom pfp ...")
     ytdlp = os.path.join(os.path.dirname(sys.executable), 'yt-dlp'); ytdlp = ytdlp if os.path.exists(ytdlp) else 'yt-dlp'   # the venv's copy
-    out = subprocess.run([ytdlp, '--impersonate', 'chrome', '--flat-playlist', '--playlist-end', '200', '--print', '%(id)s %(comment_count)s',
+    out = subprocess.run([ytdlp, '--impersonate', 'chrome', '--flat-playlist', '--playlist-end', '200', '--print', '%(id)s\t%(comment_count)s\t%(description)s',
                           f'https://www.tiktok.com/@{acc}'], capture_output=True, text=True).stdout.split('\n')
-    return {a: (int(b) if b.isdigit() else 0) for a, b in (l.split()[:2] for l in out if len(l.split()) >= 2)}
+    v = {}
+    for l in out:
+        a = l.split('\t')
+        if len(a) >= 2 and a[0].isdigit(): v[a[0]] = (int(a[1]) if a[1].isdigit() else 0, a[2] if len(a) > 2 else '')
+    return v
+
+# who has been drawn already: every "@name" in the account's own video descriptions ("@name custom pfp ...", "oneline drawing for @name").
+# The name may be the @handle or the display name (with spaces); both are compared lower-case without accents.
+MENTION = re.compile(r"@(.+?)(?='s\b|\s+(?:custom|oneline|one line|pfp)\b|\s*#|\s*$|\s{2,})", re.I)
+def drawn(descs):
+    d = {}
+    for vid, t in sorted(descs.items()):
+        for m in MENTION.findall(t or ''): d[plain(m.strip())] = vid
+    return d
+def done_vid(e, done):
+    return done.get(plain(e.get('handle') or '')) or (e.get('nick') and done.get(plain(e['nick']))) or ''
 
 def comments(vid):
     cur, out = 0, []
@@ -203,10 +219,13 @@ def main(dry=False):
     acc = CFG['account']; state = load('requests.json.enc', {'requests': [], 'videos': {}})
     state['account'] = acc; state['scanned'] = int(time.time()); state['post_caption'] = CFG.get('post_caption', ''); state['video_caption'] = CFG['video']['caption']
     names = state.setdefault('names', {}); hidden = state.setdefault('hidden', {})   # hidden: {video: comments TikTok kept from the scan}
-    known = {e['cid'] for e in state['requests']}; people = {e.get('uid') or e['handle'] for e in state['requests']}; vids = {} if PROCESS_ONLY else videos(acc); log(f'{len(vids)} videos on @{acc}')
+    known = {e['cid'] for e in state['requests']}; people = {e.get('uid') or e['handle'] for e in state['requests']}
+    vv = {} if PROCESS_ONLY else videos(acc); vids = {k: n for k, (n, _) in vv.items()}; log(f'{len(vids)} videos on @{acc}')
+    if vv: state['done'] = drawn({k: t for k, (_, t) in vv.items()})    # people already drawn in a posted video
+    done = state.get('done', {})
     new = []
     for vid, n in vids.items():
-        if n == 0 or (state['videos'].get(vid) == n and state.get('hidden_counted')): continue   # nothing new under this video
+        if n == 0 or (state['videos'].get(vid) == n and state.get('tikwm_read')): continue   # nothing new under this video
         cs = comments(vid); have = {c.get('cid') for c in cs}
         cs += [c for c in comments_tikwm(acc, vid) if c['cid'] not in have]          # the comments TikTok hides from the scan
         for c in cs:
@@ -223,7 +242,7 @@ def main(dry=False):
         if n > got: hidden[vid] = n - got
         else: hidden.pop(vid, None)
         state['videos'][vid] = n; time.sleep(0.8)
-    state['hidden_counted'] = True                     # first run with hidden counts reads every video once
+    state['hidden_counted'] = True; state['tikwm_read'] = bool(vids)   # first run with the second source reads every video once
     if not PROCESS_ONLY and CFG.get('followers', True):
         for f in followers_tikwm(acc):
             if f['unique_id'] == acc or f['unique_id'] in people or (f['uid'] and f['uid'] in people): continue
@@ -247,8 +266,15 @@ def main(dry=False):
         posted = set((load('posted.json.enc', {}) or {}).get('posted', []))
         state['requests'] = [e for e in state['requests'] if not e.get('test')]
         for e in state['requests']:
-            if e['cid'] not in posted: e.update(status='new', reason='', job='', rid='')
-    state['requests'] += new; save(state)
+            if e['cid'] not in posted and not e.get('posted_vid'): e.update(status='new', reason='', job='', rid='')
+    state['requests'] += new
+    for e in state['requests']:                          # already drawn and posted (found in a video description): never drawn again
+        v = done_vid(e, done)
+        if v and not e.get('posted_vid'):
+            e['posted_vid'] = v
+            if e['status'] in ('new', 'needs-name'): e.update(status='done', reason='already drawn and posted')
+    log(f"{sum(1 for e in state['requests'] if e.get('posted_vid'))} requests already posted (from your video descriptions), {len(done)} people drawn in all")
+    save(state)
     todo = [e for e in state['requests'] if e['status'] == 'new'][:int(CFG['max_per_run'])]
     extra = [e for e in state['requests'] if e.get('job') and e['status'] in ('ready', 'skipped') and not e.get('more') and e.get('more_tries', 0) < 2] if CFG.get('more_options') else []
     if SCAN_ONLY:                                       # light job: tell the workflow whether the drawing job is needed
