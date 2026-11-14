@@ -111,16 +111,6 @@ def comments_tikwm(acc, vid):
         cur = d.get('cursor', cur + 50)
     return out
 
-def followers_tikwm(acc):
-    # the account's followers, newest first (the service's follower list; switched off at times: then nothing)
-    p = profile(acc); uid = p and p.get('uid')
-    if not uid: return []
-    time.sleep(1.1)
-    r = http('https://www.tikwm.com/api/user/followers', params=dict(user_id=uid, count=50, cursor=0))
-    try: d = (r.json() or {}).get('data') or {} if r else {}
-    except Exception: return []
-    return [dict(uid=str(f.get('id', '')), unique_id=f.get('unique_id', ''), nickname=f.get('nickname', '')) for f in d.get('followers') or [] if f.get('unique_id')]
-
 def big_avatar(unique_id):
     r = http(f'https://www.tiktok.com/@{unique_id}')
     m = r and re.search(r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', r.text, re.S)
@@ -268,13 +258,29 @@ def main(dry=False):
         else: hidden.pop(vid, None)
         state['videos'][vid] = n; time.sleep(0.8)
     state['hidden_counted'] = True; state['tikwm_read'] = bool(vids)   # first run with the second source reads every video once
-    if not PROCESS_ONLY and CFG.get('followers', True):
-        for f in followers_tikwm(acc):
-            if f['unique_id'] == acc or f['unique_id'] in people or (f['uid'] and f['uid'] in people): continue
-            cid = 'follower-' + f['unique_id']
-            if cid in known: continue
-            new.append(dict(cid=cid, vid='', handle=f['unique_id'], nick=f['nickname'], text='', ts=int(time.time()), status='new', found=int(time.time()), uid=f['uid'], source='follower'))
-            known.add(cid); people.add(f['unique_id']); people.add(f['uid'])
+    if not PROCESS_ONLY and CFG.get('followers', True):     # new followers, read as the account by engine/followers.py
+        fo = load('followers.json.enc', None)
+        if fo:
+            state['followers_status'] = {k: fo.get(k) for k in ('status', 'checked', 'msg')}; state['followers_status']['count'] = len(fo.get('list') or [])
+            lst = fo.get('list') or [] if fo.get('status') == 'ok' else []
+            for f in lst:                                     # display name -> @handle, for screenshots and older entries
+                if f.get('nickname'):
+                    hs = names.setdefault(SR._plain(f['nickname']), [])
+                    if f['unique_id'] not in hs: hs.append(f['unique_id'])
+            seen = state.get('followers_seen')
+            if lst and seen is None: state['followers_seen'] = [f['unique_id'] for f in lst]; log(f'followers: {len(lst)} known now, new ones from here on')
+            elif lst:
+                seen = set(seen)
+                for f in lst:
+                    h = f['unique_id']
+                    if h in seen: continue
+                    seen.add(h)
+                    if h == acc or h in people or (f.get('uid') and f['uid'] in people): continue
+                    cid = 'follower-' + h
+                    if cid in known: continue
+                    new.append(dict(cid=cid, vid='', handle=h, nick=f.get('nickname', ''), text='', ts=int(time.time()), status='new', found=int(time.time()), uid=f.get('uid', ''), source='follower'))
+                    known.add(cid); people.add(h); log(f'new follower: @{h}')
+                state['followers_seen'] = sorted(seen)
     if 'TEST' in globals(): new.append(TEST)
     if '--clean-tests' in sys.argv:                     # remove every entry made by a test run
         n0 = len(state['requests']); state['requests'] = [e for e in state['requests'] if not e.get('test')]; log(f'removed {n0 - len(state["requests"])} test entries')

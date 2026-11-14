@@ -1,0 +1,29 @@
+# New followers, read as the account itself (engine/followers.py) with the TikTok login saved from the phone page.
+# Every 30 min, and right after a login is saved. Writes followers.json.enc; the request scan turns new followers into
+# requests. Planned: setup ~1 min (browser cached), reading ~1 min. Limit 10 min.
+name: followers
+on:
+  schedule: [{ cron: "17,47 * * * *" }]
+  workflow_dispatch: {}
+permissions: { contents: write, actions: write }
+concurrency: { group: followers, cancel-in-progress: false }
+jobs:
+  read:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - uses: actions/cache@v4
+        with: { path: ~/.cache/ms-playwright, key: "pw-1.65.2-${{ runner.os }}" }
+      - name: browser
+        run: |
+          pip install -q playwright==1.65.2 cryptography==50.0.1
+          python -m playwright install --with-deps chromium > /dev/null
+      - name: read new followers
+        run: python -u engine/followers.py
+      - name: started from the phone (login just saved) -> update the request list now, not in 10 min
+        if: github.event_name == 'workflow_dispatch'
+        run: gh workflow run requests.yml -f fast=true
