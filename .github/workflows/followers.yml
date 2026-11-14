@@ -4,7 +4,9 @@
 name: followers
 on:
   schedule: [{ cron: "17,47 * * * *" }]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      smoke: { description: "test with a fake login (expects 'login-expired'); saves nothing", type: boolean, default: false }
 permissions: { contents: write, actions: write }
 concurrency: { group: followers, cancel-in-progress: false }
 jobs:
@@ -23,7 +25,11 @@ jobs:
           pip install -q playwright==1.65.2 cryptography==50.0.1
           python -m playwright install --with-deps chromium > /dev/null
       - name: read new followers
+        env: { SMOKE: "${{ inputs.smoke }}" }
         run: python -u engine/followers.py
+      - if: inputs.smoke
+        uses: actions/upload-artifact@v4
+        with: { name: smoke-shot, path: followers_debug.png, if-no-files-found: ignore, retention-days: 2 }
       - name: started from the phone (login just saved) -> update the request list now, not in 10 min
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.smoke
         run: gh api -X POST repos/${{ github.repository }}/actions/workflows/requests.yml/dispatches -f ref=main -F "inputs[fast]=true"

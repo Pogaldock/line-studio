@@ -86,12 +86,15 @@ def read(cs):
         finally: b.close()
 
 def main():
-    raw = download('tt_session.json.enc')
+    raw = b'sessionid=smoke-test-not-a-login' if os.environ.get('SMOKE') == 'true' else download('tt_session.json.enc')   # smoke: a fake login, the real one untouched
     if not raw:
         upload('followers.json.enc', json.dumps(dict(status='no-login', checked=int(time.time()), msg='no TikTok login saved', list=[])).encode()); log('no login saved'); return
     cs = cookies(raw); log(f'{len(cs)} cookies, session {"present" if any(c["name"] == "sessionid" for c in cs) else "MISSING"}')
     st, msg, got, shot = read(cs)
     log(st, msg, f'{len(got)} followers read')
+    if os.environ.get('SMOKE') == 'true':
+        if shot: open('followers_debug.png', 'wb').write(shot)       # logged-out page only: kept as a run artifact
+        return
     if shot: upload('followers_debug.png.enc', shot)                     # what the browser saw, encrypted (for fixing)
     upload('followers.json.enc', json.dumps(dict(status=st, checked=int(time.time()), msg=msg, list=got)).encode())
 
