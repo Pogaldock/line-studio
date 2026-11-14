@@ -24,15 +24,20 @@ def pick(name, sel=None):
     return VARIANTS[int(sel) % len(VARIANTS)] if str(sel).lstrip('-').isdigit() else sel
 
 def caption_rgba(text, W, H):
-    # text block ~78% of the frame width, top 9% of the frame (clear of TikTok's own top bar)
+    # text block ~78% of the frame width, top 9% of the frame (clear of TikTok's own top bar). A second part after a
+    # line break ("caption\ncall to action") is set smaller under it; then the block starts at 7.5% so both stay above
+    # 20% of the frame, where the finished drawing's safe area begins (video.py SAFE).
+    main, _, sub = text.partition('\n')
     size = int(W * 0.052); font = ImageFont.truetype(FONT, size)
-    lines = textwrap.wrap(text, width=24)
     img = Image.new('RGBA', (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(img)
-    y = int(H * 0.09); stroke = max(3, size // 9)
-    for ln in lines:
-        w = d.textlength(ln, font=font); x = (W - w) / 2
-        d.text((x, y), ln, font=font, fill=(255, 255, 255, 255), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
-        y += int(size * 1.22)
+    y = int(H * (0.075 if sub.strip() else 0.09))
+    for txt, sz, wrap in ((main, size, 24), (sub.strip(), int(size * 0.62), 40)):
+        if not txt: continue
+        f = font if sz == size else ImageFont.truetype(FONT, sz); stroke = max(3, sz // 9)
+        for ln in textwrap.wrap(txt, width=wrap):
+            w = d.textlength(ln, font=f); d.text(((W - w) / 2, y), ln, font=f, fill=(255, 255, 255, 255), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+            y += int(sz * 1.22)
+        y += int(size * 0.15)
     return img
 
 def main():

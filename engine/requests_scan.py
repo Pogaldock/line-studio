@@ -173,7 +173,7 @@ def process(e, avatar, f):
 
 def main(dry=False):
     acc = CFG['account']; state = load('requests.json.enc', {'requests': [], 'videos': {}})
-    state['account'] = acc; state['scanned'] = int(time.time()); state['post_caption'] = CFG.get('post_caption', '')
+    state['account'] = acc; state['scanned'] = int(time.time()); state['post_caption'] = CFG.get('post_caption', ''); state['video_caption'] = CFG['video']['caption']
     names = state.setdefault('names', {}); hidden = state.setdefault('hidden', {})   # hidden: {video: comments TikTok kept from the scan}
     known = {e['cid'] for e in state['requests']}; people = {e.get('uid') or e['handle'] for e in state['requests']}; vids = {} if PROCESS_ONLY else videos(acc); log(f'{len(vids)} videos on @{acc}')
     new = []
