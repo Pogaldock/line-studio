@@ -1,0 +1,32 @@
+# Request list: every 2 hours, read the comments on the account's videos, find the ones asking to be drawn and get each
+# ready to post (engine/requests_scan.py; settings in engine/requests_config.json). State and every image are
+# encrypted in release "requests" / job-<id> releases.
+# Planned: setup ~1-4 min, comment scan ~1 min, then per request ~2 min (trace 3 no-crop options + render), at most 10
+# per run. Limit 40 min.
+name: requests
+run-name: requests${{ inputs.test_account && format(' (test {0})', inputs.test_account) || '' }}
+on:
+  schedule: [{ cron: "23 */2 * * *" }]
+  workflow_dispatch:
+    inputs:
+      test_account: { description: "optional: also process this account's picture as a request (end-to-end test)", required: false, default: "" }
+permissions: { contents: write }
+concurrency: { group: requests, cancel-in-progress: false }
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "true" }
+      - name: state release
+        run: gh release view requests > /dev/null 2>&1 || gh release create requests --title requests --prerelease --notes "request list state (encrypted)"
+      - name: scan and process
+        env: { TEST: "${{ inputs.test_account }}" }
+        run: |
+          if [ -n "$TEST" ]; then
+            [[ "$TEST" =~ ^[A-Za-z0-9._]{2,30}$ ]] || { echo "bad account name"; exit 1; }
+            ~/venv/bin/python -u engine/requests_scan.py --test "$TEST" "draw me pls"
+          else ~/venv/bin/python -u engine/requests_scan.py; fi

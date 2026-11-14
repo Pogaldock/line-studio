@@ -1,0 +1,8 @@
+{
+  "_about": "Settings for the automatic request list (requests_scan.py, run every 2 hours by .github/workflows/requests.yml). account: the TikTok account whose video comments are read. phrases: a comment counts as a request when it contains one of these (lowercase, accents ignored; matched as whole words). options: the drawings traced for each request (no-crop ones: a profile picture is already framed). video: the one rendered ready to post. max_per_run: requests processed per run (about 2 min each).",
+  "account": "perceptual.engineering",
+  "phrases": ["draw me", "draw my", "do me", "do mine", "do my", "my pfp", "my pp", "my profile", "me next", "pick me", "ma pp", "ma photo", "mon pp", "dessine moi", "dessine-moi", "fais moi", "fais-moi", "fais ma", "moi aussi", "dibujame", "hazme", "me too", "mine next", "pfp pls", "pfp please", "next me"],
+  "options": "t,k,l",
+  "video": { "option": "t", "caption": "one line drawing of a random comment's pfp", "seconds": 26, "comment_style": "bottom-s-out-left" },
+  "max_per_run": 10
+}

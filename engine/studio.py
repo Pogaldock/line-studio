@@ -107,6 +107,7 @@ def preview(still_png, out_jpg, width=900):
 def trace(args):
     work = os.path.abspath(args.workdir); os.makedirs(work, exist_ok=True)
     opts = json.load(open(os.path.join(HERE, 'options.json')))['options']
+    if args.only: opts = [o for o in opts if o['id'] in args.only.split(',')]      # e.g. requests: only the no-crop options
     pr = Progress(work, args.tag, 'trace', 'progress_trace.json')
     pr.d['options'] = [dict(id=o['id'], name=o['name'], note=o.get('note', ''), state='queued', pct=0) for o in opts]
     log = open(os.path.join(work, 'trace.log'), 'a')
@@ -129,7 +130,8 @@ def trace(args):
         def creep():                                         # the crop step logs nothing until it ends: ~9 s measured
             while not fill.wait(1): pr.set(pct=min(11, 2 + 9 * (time.time() - t_crop) / 9))
         threading.Thread(target=creep, daemon=True).start()
-        run([PY, 'autocrop.py', photo, crop], log=log); fill.set()
+        if any(o.get('crop', True) for o in opts): run([PY, 'autocrop.py', photo, crop], log=log)
+        fill.set()
         srcs = {True: crop, False: photo}
         creeping = {}
         def creep_opts():
@@ -312,6 +314,7 @@ def render(args):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest='cmd', required=True)
     a = sp.add_parser('trace'); a.add_argument('photo'); a.add_argument('workdir'); a.add_argument('--tag')
+    a.add_argument('--only', default='', help='comma-separated option ids (default: all)')
     b = sp.add_parser('render'); b.add_argument('workdir'); b.add_argument('option'); b.add_argument('caption')
     b.add_argument('--seconds', type=float, default=26); b.add_argument('--ink', type=float, default=1.0); b.add_argument('--tag')
     b.add_argument('--comment', default='', help='encrypted comment crop asset (comment_*.png.enc) in the workdir'); b.add_argument('--cstyle', default='')

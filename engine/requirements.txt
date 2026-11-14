@@ -18,3 +18,5 @@ opencv-python==5.0.0.93
 cryptography==50.0.1
 imageio-ffmpeg==0.8.1
 nudenet==3.4.2
+yt-dlp==2026.10.26
+curl_cffi==0.17.0
