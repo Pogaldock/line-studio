@@ -1,5 +1,7 @@
-models/dl/
-models/*.pt
-models/*.pth
-models/cache/
+# local model downloads and caches: never committed (caches are derived from photos; the repo is public)
+engine/models/cache/
+engine/models/dl/
+engine/models/*.pt
+engine/models/*.pth
+engine/models/depth_anything_v2_small.onnx
 __pycache__/

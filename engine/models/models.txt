@@ -3,3 +3,4 @@ FastSAM-s.pt c9f78716a81c7aff0d608ccc73e1b82ab3aaad86005049f6a92106a0be6d0844 ht
 yolov8n-pose.pt c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212 https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n-pose.pt
 RealESRGAN_x4plus.pth 4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1 https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
 isnet-general-use.onnx 60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx
+depth_anything_v2_small.onnx afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx
