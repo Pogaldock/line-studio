@@ -74,8 +74,9 @@ def save(state):
 
 # ---------- inbox: comment screenshots and typed @names from the phone page (assets of release "requests") ----------
 #   shot_<id>.png.enc / .jpg.enc   a screenshot of comments: every comment in it becomes a request (except the account's own)
-#   add_<id>.json.enc               {"handles": ["name", ...], "assign": {"<request id>": "name"}}: typed @names, and @names
-#                                   given to screenshot requests the matcher could not place
+#   add_<id>.json.enc               {"handles": ["name", ...], "assign": {"<request id>": "name"}, "redo": ["<request id>"]}:
+#                                   typed @names, @names given to screenshot requests the matcher could not place, and
+#                                   requests to remake from scratch (new job)
 # each file is removed once read.
 def profile(h):
     r = http(f'https://www.tiktok.com/@{h}')
@@ -116,6 +117,9 @@ def inbox(state, known, people):
                     if not re.fullmatch(r'[a-z0-9._]{2,24}', h) or h in people: continue
                     new.append(dict(cid='name-' + h, vid='', handle=h, nick='', text='', ts=int(time.time()), found=int(time.time()), source='typed', status='new', test=n.startswith('add_test')))
                     known.add('name-' + h); people.add(h); log(f'typed: @{h}')
+                for cid in d.get('redo') or []:                # remake from scratch (new job: video + all the options)
+                    e = byid.get(cid)
+                    if e and e.get('handle'): e.update(status='new', reason='', job='', rid='', more=False, more_tries=0); log(f'redo: @{e["handle"]}')
                 for cid, h in (d.get('assign') or {}).items():
                     h = h.strip().lstrip('@').lower(); e = byid.get(cid)
                     if e and re.fullmatch(r'[a-z0-9._]{2,24}', h): e.update(handle=h, status='new', reason=''); people.add(h); log(f'@name given: @{h}')
