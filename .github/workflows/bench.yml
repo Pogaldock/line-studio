@@ -1,0 +1,28 @@
+# Timing test for a TikTok LIVE version: profile-picture-sized photos (720 px) traced one after another with the
+# models kept loaded (engine/pfpbench.py). Test faces come from thispersondoesnotexist.com (generated, no real people).
+# Planned: setup ~4 min cold, 9 pictures x ~15-25 s, stills ~1 min. Limit 25 min.
+name: bench
+on: { workflow_dispatch: {} }
+permissions: { contents: read }
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "true" }
+      - name: test faces (generated)
+        run: |
+          mkdir -p faces
+          for i in $(seq 0 8); do curl -sSfL -A "Mozilla/5.0" -o faces/f$i.jpg https://thispersondoesnotexist.com/ && sleep 2; done
+          ~/venv/bin/python -c "import cv2,glob; [cv2.imwrite(f, cv2.resize(cv2.imread(f), (720, 720), interpolation=cv2.INTER_AREA)) for f in glob.glob('faces/*.jpg')]"
+          ls -la faces
+      - name: time the pictures
+        run: ~/venv/bin/python -u engine/pfpbench.py out faces/*.jpg
+      - name: stills
+        run: |
+          cd engine; for d in ../out/*/; do n=$(basename $d); f=$(ls ../faces | sed -n "$((10#${n%%_*}+1))p")
+            NO916=1 HUMANIZE=1 STILL=1 HU_ARGS="smooth=1.2 drift=0.5 spike=2.5 taper=10 var=0.12" ~/venv/bin/python make916.py ../faces/$f $d ../out/$n.mp4 26 > /dev/null 2>&1; done; ls ../out
+      - uses: actions/upload-artifact@v4
+        with: { name: bench-stills, path: "out/*_still.png", retention-days: 2 }

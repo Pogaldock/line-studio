@@ -24,10 +24,12 @@ def depth_map(img):
     # relative inverse depth, 0 (far) .. 1 (near), same size as img
     key = (img.shape, hash(img[::17, ::17].tobytes()))
     if key in _CACHE: return _CACHE[key]
-    import onnxruntime as ort
-    f = os.path.join(HERE, 'models', 'dl', 'depth_anything_v2_small.onnx')
-    if not os.path.exists(f): f = os.path.join(HERE, 'models', 'depth_anything_v2_small.onnx')
-    s = ort.InferenceSession(f, providers=['CPUExecutionProvider'])
+    if 'sess' not in _CACHE:                                  # model loaded once per process (a live keeps it warm)
+        import onnxruntime as ort
+        f = os.path.join(HERE, 'models', 'dl', 'depth_anything_v2_small.onnx')
+        if not os.path.exists(f): f = os.path.join(HERE, 'models', 'depth_anything_v2_small.onnx')
+        _CACHE['sess'] = ort.InferenceSession(f, providers=['CPUExecutionProvider'])
+    s = _CACHE['sess']
     h, w = img.shape[:2]; sc = 518 / min(h, w)
     H14, W14 = max(14, int(round(h * sc / 14)) * 14), max(14, int(round(w * sc / 14)) * 14)
     x = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), (W14, H14), interpolation=cv2.INTER_CUBIC).astype(np.float32) / 255
