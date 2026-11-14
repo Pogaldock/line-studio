@@ -53,6 +53,31 @@ def drawn(descs):
     for vid, t in sorted(descs.items()):
         for m in MENTION.findall(t or ''): d[plain(m.strip())] = vid
     return d
+def tidy(state, done):
+    # one entry per person, and nobody drawn twice:
+    #  - a screenshot name with no @handle gets it from the comments read (display name -> @handle), when only one person has that name
+    #  - a person found in a video description, or marked posted on the phone, is posted on all their entries; new ones are not drawn
+    #  - more entries for the same @handle (asked twice, or from a screenshot too) are folded into the first: marked dup, hidden on the page
+    rs = state['requests']; names = state.get('names', {})
+    for e in rs:
+        if e['status'] == 'needs-name' and e.get('nick'):
+            hs = names.get(SR._plain(e['nick'])) or []
+            if len(hs) == 1: e.update(handle=hs[0], status='new', reason='')
+    marked = set((load('posted.json.enc', {}) or {}).get('posted', []))
+    vid_of = {}
+    for e in rs:
+        v = e.get('posted_vid') or done_vid(e, done) or ('phone' if e['cid'] in marked else '')
+        if v and e.get('handle'): vid_of.setdefault(e['handle'].lower(), v)
+    first = {}
+    for e in sorted(rs, key=lambda e: (not (e.get('posted_vid') or e['cid'] in marked), not e.get('job'), e.get('found', 0))):
+        h = (e.get('handle') or '').lower()
+        if not h: continue
+        if h in first and first[h] is not e: e['dup'] = first[h]['cid']
+        else: first[h] = e; e.pop('dup', None)
+        v = vid_of.get(h)
+        if v and v != 'phone' and not e.get('posted_vid'): e['posted_vid'] = v
+        if v and e['status'] in ('new', 'needs-name') and not e.get('job'): e.update(status='done', reason='already drawn and posted')
+        if e.get('dup') and e['status'] == 'new': e.update(status='done', reason='asked twice')
 def done_vid(e, done):
     return done.get(plain(e.get('handle') or '')) or (e.get('nick') and done.get(plain(e['nick']))) or ''
 
@@ -268,11 +293,7 @@ def main(dry=False):
         for e in state['requests']:
             if e['cid'] not in posted and not e.get('posted_vid'): e.update(status='new', reason='', job='', rid='')
     state['requests'] += new
-    for e in state['requests']:                          # already drawn and posted (found in a video description): never drawn again
-        v = done_vid(e, done)
-        if v and not e.get('posted_vid'):
-            e['posted_vid'] = v
-            if e['status'] in ('new', 'needs-name'): e.update(status='done', reason='already drawn and posted')
+    tidy(state, done)
     log(f"{sum(1 for e in state['requests'] if e.get('posted_vid'))} requests already posted (from your video descriptions), {len(done)} people drawn in all")
     save(state)
     todo = [e for e in state['requests'] if e['status'] == 'new'][:int(CFG['max_per_run'])]
