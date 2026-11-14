@@ -49,7 +49,8 @@ def depth_edges(d):
 def depth_curves(d, canny):
     # thin outline curves of the depth map itself (Canny on the depth image), as a 0/1 map for the stroke tracer
     g = (cv2.GaussianBlur(d, (0, 0), 1.0) * 255).astype(np.uint8)
-    return (cv2.Canny(g, canny, canny * 2.5) > 0).astype(np.float32)
+    e = cv2.Canny(g, canny, canny * 2.5)                     # 3 px wide for the shared tracer (see relief_lines)
+    return (cv2.dilate(e, np.ones((3, 3), np.uint8)) > 0).astype(np.float32)
 
 def relief(d):
     # relative depth change: each point against the strongest change around it, so a nose counts inside a face even
@@ -61,8 +62,21 @@ def relief(d):
     return np.clip(dg / (cv2.GaussianBlur(locmax, (0, 0), k / 4) + 0.02 * dg.max()), 0, 1.5)
 
 def relief_lines(d):
-    # hysteresis: weak relief kept where it connects to strong relief, then thinned to centre lines (0/1 float map)
-    r = relief(d); strong = r > D['relief_hi']; weak = (r > D['relief_lo']).astype(np.uint8)
-    n, lab = cv2.connectedComponents(weak); keep = np.zeros(n, bool); keep[np.unique(lab[strong])] = True; keep[0] = False
-    from skimage.morphology import skeletonize
-    return skeletonize(keep[lab]).astype(np.float32)
+    # Canny-style on the relative relief: keep only the crest of each ridge (a pixel stays if it is stronger than its
+    # two neighbours across the edge, i.e. along the depth gradient), then hysteresis (weak crest kept where connected to
+    # strong crest). Thin, single lines by construction: no blobs, no junction noise. 0/1 float map.
+    gd = cv2.GaussianBlur(d, (0, 0), 2); gx, gy = cv2.Sobel(gd, cv2.CV_32F, 1, 0), cv2.Sobel(gd, cv2.CV_32F, 0, 1)
+    r = relief(d); h, w = r.shape
+    ang = (np.rad2deg(np.arctan2(gy, gx)) + 180) % 180; q = np.zeros(r.shape, np.int8)
+    q[(ang >= 22.5) & (ang < 67.5)] = 1; q[(ang >= 67.5) & (ang < 112.5)] = 2; q[(ang >= 112.5) & (ang < 157.5)] = 3
+    p = np.pad(r, 1, mode='edge'); c = p[1:-1, 1:-1]
+    nbr = {0: (p[1:-1, 2:], p[1:-1, :-2]), 1: (p[2:, 2:], p[:-2, :-2]), 2: (p[2:, 1:-1], p[:-2, 1:-1]), 3: (p[2:, :-2], p[:-2, 2:])}
+    crest = np.zeros(r.shape, bool)
+    for k, (a1, a2) in nbr.items(): crest |= (q == k) & (c >= a1) & (c >= a2)
+    weak = crest & (r > D['relief_lo']); strong = crest & (r > D['relief_hi'])
+    n, lab = cv2.connectedComponents(weak.astype(np.uint8), connectivity=8)
+    keep = np.zeros(n, bool); keep[np.unique(lab[strong])] = True; keep[0] = False
+    from skimage.morphology import thin
+    # returned 3 px wide: the shared stroke tracer drops 4-connected specks before thinning, which would cut a 1 px
+    # diagonal line into pieces; at 3 px it stays one piece and the tracer thins it back to its centre
+    return cv2.dilate(thin(keep[lab]).astype(np.uint8), np.ones((3, 3), np.uint8)).astype(np.float32)
