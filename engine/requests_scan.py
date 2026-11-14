@@ -119,7 +119,7 @@ def inbox(state, known, people):
                     known.add('name-' + h); people.add(h); log(f'typed: @{h}')
                 for cid in d.get('redo') or []:                # remake from scratch (new job: video + all the options)
                     e = byid.get(cid)
-                    if e and e.get('handle'): e.update(status='new', reason='', job='', rid='', more=False, more_tries=0); log(f'redo: @{e["handle"]}')
+                    if e and e.get('handle'): e.update(status='new', reason='', job='', rid='', more=False, more_tries=0, gone=False); log(f'redo: @{e["handle"]}')
                 for cid, h in (d.get('assign') or {}).items():
                     h = h.strip().lstrip('@').lower(); e = byid.get(cid)
                     if e and re.fullmatch(r'[a-z0-9._]{2,24}', h): e.update(handle=h, status='new', reason=''); people.add(h); log(f'@name given: @{h}')
@@ -238,6 +238,8 @@ def main(dry=False):
         jid = e['job']; w = os.path.join(WORK, jid, 'work'); os.makedirs(w, exist_ok=True)
         for n in ('photo.jpg.enc', 'progress_trace.json'):
             subprocess.run(['gh', 'release', 'download', 'job-' + jid, '-p', n, '-D', w if n.endswith('.json') else os.path.join(WORK, jid), '--clobber'], capture_output=True)
+        if not os.path.exists(os.path.join(WORK, jid, 'photo.jpg.enc')):    # the job was deleted from the phone: the page offers Redo
+            e.update(gone=True, more_tries=2); log('job deleted:', jid); save(state); continue
         r = subprocess.run([sys.executable, os.path.join(HERE, 'studio.py'), 'trace', os.path.join(WORK, jid, 'photo.jpg.enc'), w, '--tag', 'job-' + jid,
                             '--only', CFG['more_options'], '--append'])
         e['more'] = r.returncode == 0; e['more_tries'] = e.get('more_tries', 0) + 1; log('more options for an earlier request:', 'ready' if e['more'] else 'failed', jid); save(state)
