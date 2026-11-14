@@ -204,7 +204,57 @@ def caption_png(text, path):
     img = np.array(CP.caption_rgba(CP.pick('x', text if text.strip() else '0'), 1080, 1920))
     cv2.imwrite(path, cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)); return path
 
+# ---------- comment overlay (optional): a cropped comment screenshot floating over the video ----------
+# style = "<pos>-<size>-<fade>": pos top|mid|bottom (centre height 30 / 50 / 66 % of the frame, clear of the caption and
+# of TikTok's bottom bar), size s|m|l (62 / 74 / 86 % of the frame width), fade stay|out (fades out over the last 25 %
+# so the finished drawing ends clean). The card gets rounded corners and a soft shadow, fades in at 0.3 s and bobs
+# 10 px up and down every 3.2 s.
+CPOS = dict(top=0.30, mid=0.50, bottom=0.66); CSIZE = dict(s=0.62, m=0.74, l=0.86)
+def parse_cstyle(st):
+    p = (st or 'bottom-m-stay').split('-') + ['', '', '']
+    return (p[0] if p[0] in CPOS else 'bottom', p[1] if p[1] in CSIZE else 'm', p[2] if p[2] in ('stay', 'out') else 'stay')
+
+def comment_card(src, out, style, W=1080, H=1920):
+    pos, size, _ = parse_cstyle(style)
+    im = cv2.imread(src, cv2.IMREAD_COLOR)
+    if im is None: raise RuntimeError('comment image could not be read')
+    cw = int(W * CSIZE[size]); ch = max(1, int(im.shape[0] * cw / im.shape[1]))
+    if ch > 0.42 * H: ch = int(0.42 * H); cw = int(im.shape[1] * ch / im.shape[0])     # very tall crops: limit height
+    im = cv2.resize(im, (cw, ch), interpolation=cv2.INTER_AREA)
+    pad = 36; r = max(18, int(cw * 0.035))
+    card = np.zeros((ch + 2 * pad, cw + 2 * pad, 4), np.uint8)
+    mask = np.zeros((ch, cw), np.uint8)
+    cv2.rectangle(mask, (r, 0), (cw - r, ch), 255, -1); cv2.rectangle(mask, (0, r), (cw, ch - r), 255, -1)
+    for cx, cy in ((r, r), (cw - r - 1, r), (r, ch - r - 1), (cw - r - 1, ch - r - 1)): cv2.circle(mask, (cx, cy), r, 255, -1, cv2.LINE_AA)
+    sh = np.zeros(card.shape[:2], np.float32); sh[pad + 10:pad + 10 + ch, pad:pad + cw] = mask / 255.0
+    sh = cv2.GaussianBlur(sh, (0, 0), 14) * 0.55                                       # soft drop shadow
+    card[:, :, 3] = (sh * 255).astype(np.uint8)
+    a = mask[:, :, None] / 255.0; reg = card[pad:pad + ch, pad:pad + cw]
+    reg[:, :, :3] = (im * a).astype(np.uint8); reg[:, :, 3] = np.maximum(reg[:, :, 3], mask)
+    cv2.imwrite(out, card)
+    y = int(CPOS[pos] * H - card.shape[0] / 2)
+    return out, int(np.clip(y, int(0.16 * H), int(0.80 * H) - card.shape[0]))
+
+def overlay_pass(raw, capf, final, seconds, pr, comment=None, cstyle=''):
+    # one encode: caption (static) + optional comment card (fade in, gentle bob, optional fade out)
+    ins = ['-i', raw, '-i', capf]; fc = '[0][1]overlay=0:0'
+    if comment:
+        card, y = comment_card(comment, os.path.splitext(capf)[0] + '_comment.png', cstyle)
+        dur = float(seconds) + 4; fade = 'fade=t=in:st=0.3:d=0.5:alpha=1'
+        if parse_cstyle(cstyle)[2] == 'out': fade += f',fade=t=out:st={0.75 * dur:.2f}:d=0.8:alpha=1'
+        ins += ['-loop', '1', '-t', f'{dur:.2f}', '-i', card]
+        fc += f'[v];[2]format=rgba,{fade}[c];[v][c]overlay=x=(W-w)/2:y={y}+10*sin(2*PI*t/3.2):shortest=1'
+    p = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', *ins, '-filter_complex', fc, '-c:v', 'libx264', '-preset', 'veryfast',
+                          '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-progress', 'pipe:1', final], stdout=subprocess.PIPE, text=True)
+    total_us = float(seconds + 4) * 1e6
+    for line in p.stdout:                                  # ffmpeg reports out_time_us as it encodes
+        if line.startswith('out_time_us='):
+            try: pr.set(stage='adding the caption to the video', pct=int(20 + 70 * min(1, float(line.split('=')[1]) / total_us)))
+            except ValueError: pass
+    if p.wait(): raise RuntimeError('caption pass failed')
+
 def secs_tag(x): return f'{float(x):g}'
+
 def master_name(work, oid, secs, ink): return os.path.join(work, f'raw_{oid}_{secs_tag(secs)}_{float(ink):g}.mp4')
 
 def prerender(args):
@@ -228,21 +278,23 @@ def render(args):
         final = os.path.join(work, f'video_{oid}.mp4'); capf = caption_png(args.caption, os.path.join(work, f'caption_{oid}.png'))
         raw = master_name(work, oid, args.seconds, args.ink)
         if not os.path.exists(raw) and os.path.exists(raw + '.enc'): unseal(raw + '.enc', raw)
-        if os.path.exists(raw):                                # pre-rendered master: only the caption pass
-            pr.set(push=True, stage='adding the caption to the pre-rendered video', pct=20)
-            p = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-i', raw, '-i', capf, '-filter_complex', 'overlay=0:0', '-c:v', 'libx264', '-preset', 'veryfast',
-                                  '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-progress', 'pipe:1', final], stdout=subprocess.PIPE, text=True)
-            total_us = float(args.seconds + 4) * 1e6
-            for line in p.stdout:                              # ffmpeg reports out_time_us as it encodes
-                if line.startswith('out_time_us='):
-                    try: pr.set(stage='adding the caption to the pre-rendered video', pct=int(20 + 70 * min(1, float(line.split('=')[1]) / total_us)))
-                    except ValueError: pass
-            if p.wait(): raise RuntimeError('caption pass failed')
-        else:                                                  # no master for this speed: full render, caption burned in
+        comment = None
+        if args.comment:                                       # encrypted comment crop from the phone
+            enc = os.path.join(work, args.comment)
+            if not os.path.exists(enc): raise RuntimeError(f'comment image {args.comment} missing')
+            comment = enc[:-4]; unseal(enc, comment)
+        if not os.path.exists(raw):                            # no master for this speed: draw one first (no caption)
             pr.set(push=True, stage='unpacking the chosen drawing', pct=3)
             unpack(work, oid, d)
-            pr.set(stage='drawing the video frames', pct=8)
-            draw_video(d, final, args.seconds, pr, 8, 90, caption_png=capf, ink=args.ink)
+            pr.set(stage='drawing the video frames', pct=5)
+            draw_video(d, raw, args.seconds, pr, 5, 80, crf='12', ink=args.ink)
+            pr.set(push=True, stage='adding the caption to the video', pct=80)
+            class Tail:                                        # the overlay pass reports 20..90 %; here it is 80..92 %
+                def set(self, **kw): pr.set(**{**kw, 'pct': 80 + (kw.get('pct', 20) - 20) * 12 // 70})
+            overlay_pass(raw, capf, final, args.seconds, Tail(), comment, args.cstyle)
+        else:                                                  # pre-rendered master: only the caption pass
+            pr.set(push=True, stage='adding the caption to the pre-rendered video', pct=20)
+            overlay_pass(raw, capf, final, args.seconds, pr, comment, args.cstyle)
         pr.set(stage='uploading the video', pct=94)
         upload_private(args.tag, [final])
         pr.set(push=True, stage='video ready', pct=100, done=True, video=os.path.basename(final))
@@ -255,5 +307,6 @@ if __name__ == '__main__':
     a = sp.add_parser('trace'); a.add_argument('photo'); a.add_argument('workdir'); a.add_argument('--tag')
     b = sp.add_parser('render'); b.add_argument('workdir'); b.add_argument('option'); b.add_argument('caption')
     b.add_argument('--seconds', type=float, default=26); b.add_argument('--ink', type=float, default=1.0); b.add_argument('--tag')
+    b.add_argument('--comment', default='', help='encrypted comment crop asset (comment_*.png.enc) in the workdir'); b.add_argument('--cstyle', default='')
     c = sp.add_parser('prerender'); c.add_argument('workdir'); c.add_argument('option', help='one id or several: a,e'); c.add_argument('--seconds', type=float, default=26); c.add_argument('--ink', type=float, default=1.0); c.add_argument('--tag')
     args = ap.parse_args(); dict(trace=trace, render=render, prerender=prerender)[args.cmd](args)

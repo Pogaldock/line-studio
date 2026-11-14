@@ -1,6 +1,6 @@
 # Chosen option -> captioned 30 s video (video_<option>.mp4 on release job-<id>). Started by the phone page.
-# Planned time: light setup ~15 s; with the pre-rendered master only the caption pass (~15 s), otherwise a full
-# render (~40 s on 4 cores). Limit 15 min.
+# Planned time: light setup ~15 s; with the pre-rendered master only the caption (+ comment) pass (~15 s), otherwise
+# a master render (~40 s on 4 cores) then that pass. Limit 15 min.
 name: render
 run-name: render ${{ inputs.job }} ${{ inputs.option }}
 on:
@@ -11,6 +11,8 @@ on:
       caption: { required: false, default: "" }
       seconds: { required: false, default: "26" }
       ink: { required: false, default: "1" }
+      comment: { required: false, default: "" }
+      cstyle: { required: false, default: "" }
 permissions: { contents: write }
 concurrency: { group: "render-${{ inputs.job }}-${{ inputs.option }}", cancel-in-progress: true }
 jobs:
@@ -28,9 +30,15 @@ jobs:
           gh release download "$TAG" -p "opt_${OPT}.tgz.enc" -D work
           M=$(python3 -c "import sys;print(f'raw_{sys.argv[1]}_{float(sys.argv[2]):g}_{float(sys.argv[3]):g}.mp4.enc')" "$OPT" "$SECONDS_" "$INK")
           gh release download "$TAG" -p "$M" -D work || echo "no pre-rendered master ($M): full render"
+      - name: get the comment crop (optional)
+        if: inputs.comment != ''
+        env: { COMMENT: "${{ inputs.comment }}" }
+        run: |
+          [[ "$COMMENT" =~ ^comment_[a-z0-9]{1,12}\.png\.enc$ ]] || { echo "bad comment name"; exit 1; }
+          gh release download "$TAG" -p "$COMMENT" -D work
       - name: render video
-        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}", INK: "${{ inputs.ink }}" }
-        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --ink "$INK" --tag "$TAG"
+        env: { CAPTION: "${{ inputs.caption }}", SECONDS_: "${{ inputs.seconds }}", OPT: "${{ inputs.option }}", INK: "${{ inputs.ink }}", COMMENT: "${{ inputs.comment }}", CSTYLE: "${{ inputs.cstyle }}" }
+        run: ~/venv/bin/python engine/studio.py render work "$OPT" "$CAPTION" --seconds "$SECONDS_" --ink "$INK" --comment "$COMMENT" --cstyle "$CSTYLE" --tag "$TAG"
       - name: report failure
         if: failure()
         run: |
