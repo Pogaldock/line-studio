@@ -110,6 +110,7 @@ def process(e, avatar, f):
 
 def main(dry=False):
     acc = CFG['account']; state = load('requests.json.enc', {'requests': [], 'videos': {}})
+    state['account'] = acc; state['scanned'] = int(time.time())
     known = {e['cid'] for e in state['requests']}; vids = videos(acc); log(f'{len(vids)} videos on @{acc}')
     new = []
     for vid, n in vids.items():
