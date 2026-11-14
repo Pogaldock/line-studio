@@ -7,6 +7,8 @@
 #                       {cid, vid, handle, nick, text, ts, thumb (64 px jpeg, base64), status, reason, job, rid, found}
 #                       status: skipped (reason; job set when the trace ran) | failed (reason) | ready (job + rid -> video_t_<rid>.mp4)
 #   posted.json.enc     written only by the phone page: {"posted": [cid, ...]}
+#   shot_*/add_*.enc    the phone's inbox (screenshots, typed @names), read and removed by the scan (see inbox())
+#   status needs-name: a screenshot comment whose @handle could not be confirmed; the page asks for it
 #   each request's job is an ordinary release job-<id> (named "request", nothing personal in clear text), so the phone's
 #   job view, other options and re-renders work as for any photo.
 # Usage: python3 requests_scan.py [--dry] [--redo] [--test <account> "<text>"]
@@ -15,7 +17,7 @@
 #   --dry: list the requests found, process nothing; --test: add that account as a request (end-to-end test)
 import os, sys, re, json, time, base64, subprocess, unicodedata, uuid, datetime, numpy as np, cv2
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
-import studio as ST, pfpcheck as K       # both import only numpy/cv2 at the top: fine in the light environment
+import studio as ST, pfpcheck as K, shotread as SR   # numpy/cv2 at the top only (OCR loads on first use): fine in the light environment
 CFG = json.load(open(os.path.join(HERE, 'requests_config.json')))
 REL = 'requests'; WORK = os.path.abspath('reqwork'); os.makedirs(WORK, exist_ok=True)
 T0 = time.time()
@@ -70,27 +72,79 @@ def save(state):
     p = os.path.join(WORK, 'requests.json'); json.dump(state, open(p, 'w'))
     ST.upload(REL, [ST.seal(p)])
 
+# ---------- inbox: comment screenshots and typed @names from the phone page (assets of release "requests") ----------
+#   shot_<id>.png.enc / .jpg.enc   a screenshot of comments: every comment in it becomes a request (except the account's own)
+#   add_<id>.json.enc               {"handles": ["name", ...], "assign": {"<request id>": "name"}}: typed @names, and @names
+#                                   given to screenshot requests the matcher could not place
+# each file is removed once read.
+def profile(h):
+    r = http(f'https://www.tiktok.com/@{h}')
+    m = r and re.search(r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', r.text, re.S)
+    if not m: return None
+    u = json.loads(m.group(1))['__DEFAULT_SCOPE__'].get('webapp.user-detail', {}).get('userInfo', {}).get('user', {})
+    if not u.get('uniqueId'): return None
+    a = http(u.get('avatarThumb') or u.get('avatarMedium') or '')
+    return dict(nickname=u.get('nickname', ''), avatar=cv2.imdecode(np.frombuffer(a.content, np.uint8), cv2.IMREAD_COLOR) if a else None, uid=u.get('id', ''))
+
+def inbox(state, known, people):
+    r = subprocess.run(['gh', 'release', 'view', REL, '--json', 'assets', '-q', '.assets[].name'], capture_output=True, text=True)
+    files = [n for n in r.stdout.split() if re.fullmatch(r'(shot_[a-z0-9]{6,12}\.(png|jpg)|add_[a-z0-9]{6,12}\.json)\.enc', n)]
+    new, byid = [], {e['cid']: e for e in state['requests']}
+    for n in files:
+        p = os.path.join(WORK, n)
+        if subprocess.run(['gh', 'release', 'download', REL, '-p', n, '-D', WORK, '--clobber'], capture_output=True).returncode: continue
+        try:
+            raw = ST.unseal(p, p[:-4])
+            if n.startswith('shot_'):
+                img = cv2.imread(raw); found = SR.read(img) if img is not None else []
+                log(f'{n}: {len(found)} comments read')
+                for c in found:
+                    cid = 'shot-' + uuid.uuid5(uuid.NAMESPACE_OID, SR._plain(c['nick']) + '|' + c['text']).hex[:12]
+                    if cid in known: continue
+                    h, why = SR.resolve(c['nick'], c['avatar'], profile, state.get('names'))
+                    if h and h == CFG['account']: continue
+                    if h and h in people: log(f'  {c["nick"]}: already in the list as @{h}'); continue
+                    thumb = base64.b64encode(cv2.imencode('.jpg', cv2.resize(c['avatar'], (64, 64)), [cv2.IMWRITE_JPEG_QUALITY, 80])[1]).decode() if c['avatar'] is not None else ''
+                    e = dict(cid=cid, vid='', handle=h or '', nick=c['nick'], text=c['text'][:300], ts=int(time.time()), found=int(time.time()), source='screenshot', test=n.startswith('shot_test'),
+                             status='new' if h else 'needs-name', reason='' if h else why, thumb=thumb)
+                    log(f'  {c["nick"]}: {"@" + h if h else "needs a @name"} ({why})')
+                    new.append(e); known.add(cid); people.add(h) if h else None
+            else:
+                d = json.load(open(raw))
+                for h in d.get('handles', []):
+                    h = h.strip().lstrip('@').lower()
+                    if not re.fullmatch(r'[a-z0-9._]{2,24}', h) or h in people: continue
+                    new.append(dict(cid='name-' + h, vid='', handle=h, nick='', text='', ts=int(time.time()), found=int(time.time()), source='typed', status='new', test=n.startswith('add_test')))
+                    known.add('name-' + h); people.add(h); log(f'typed: @{h}')
+                for cid, h in (d.get('assign') or {}).items():
+                    h = h.strip().lstrip('@').lower(); e = byid.get(cid)
+                    if e and re.fullmatch(r'[a-z0-9._]{2,24}', h): e.update(handle=h, status='new', reason=''); people.add(h); log(f'@name given: @{h}')
+        except Exception as ex: log(f'{n}: could not be read ({ex})')
+        subprocess.run(['gh', 'release', 'delete-asset', REL, n, '-y'], capture_output=True)
+    return new
+
 # ---------- the comment card shown at the start of the video ----------
 def card(avatar, handle, text, path):
     from PIL import Image, ImageDraw, ImageFont
     def font(bold, size):
         f = '/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf' % ('-Bold' if bold else '')
         return ImageFont.truetype(f, size) if os.path.exists(f) else ImageFont.load_default(size)
-    text = ''.join(c for c in text if ord(c) < 0x2190 or 0x3000 <= ord(c) < 0xFFF0).strip() or '...'   # emoji the font lacks
+    text = ''.join(c for c in text if ord(c) < 0x2190 or 0x3000 <= ord(c) < 0xFFF0).strip()   # emoji the font lacks
     W, pad, av = 860, 30, 112; fh, ft = font(True, 40), font(False, 58)          # big text: the card is shown small
     words, lines, cur = text.split(), [], ''
     for w in words:
         t = (cur + ' ' + w).strip()
         if ImageDraw.Draw(Image.new('RGB', (1, 1))).textlength(t, font=ft) > W - 3 * pad - av and cur: lines.append(cur); cur = w
         else: cur = t
-    lines = (lines + [cur])[:3]
+    lines = [l for l in (lines + [cur])[:3] if l]
+    if not lines: fh = font(True, 52)                                              # a typed @name only: just the name, bigger
     meas = ImageDraw.Draw(Image.new('RGB', (1, 1)))           # card as wide as its text: a short comment stays big on screen
     W = int(min(W, max(420, 3 * pad + av + max([meas.textlength(handle, font=fh)] + [meas.textlength(l, font=ft) for l in lines]))))
-    H = max(av + 2 * pad, pad + 54 + 70 * len(lines) + pad)
+    H = max(av + 2 * pad, pad + 54 + 70 * len(lines) + pad) if lines else av + 2 * pad
     im = Image.new('RGB', (W, H), (31, 41, 46)); d = ImageDraw.Draw(im)
     a = Image.fromarray(cv2.cvtColor(cv2.resize(avatar, (av, av), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB))
     m = Image.new('L', (av, av), 0); ImageDraw.Draw(m).ellipse((0, 0, av - 1, av - 1), fill=255); im.paste(a, (pad, pad), m)
-    x = pad * 2 + av; d.text((x, pad), handle, font=fh, fill=(160, 166, 172))
+    x = pad * 2 + av; d.text((x, pad if lines else pad + (av - 52) // 2), handle, font=fh, fill=(160, 166, 172) if lines else (240, 240, 240))
     for i, l in enumerate(lines): d.text((x, pad + 54 + 70 * i), l, font=ft, fill=(240, 240, 240))
     im.save(path); return path
 
@@ -115,12 +169,16 @@ def process(e, avatar, f):
 def main(dry=False):
     acc = CFG['account']; state = load('requests.json.enc', {'requests': [], 'videos': {}})
     state['account'] = acc; state['scanned'] = int(time.time())
+    names = state.setdefault('names', {})
     known = {e['cid'] for e in state['requests']}; people = {e.get('uid') or e['handle'] for e in state['requests']}; vids = {} if PROCESS_ONLY else videos(acc); log(f'{len(vids)} videos on @{acc}')
     new = []
     for vid, n in vids.items():
         if n == 0 or state['videos'].get(vid) == n: continue                # nothing new under this video since last run
         for c in comments(vid):
             u = c.get('user') or {}; cid = c.get('cid'); text = c.get('text') or ''
+            if u.get('nickname') and u.get('unique_id'):          # display name -> @handle, for reading screenshots later
+                hs = names.setdefault(SR._plain(u['nickname']), [])
+                if u['unique_id'] not in hs: hs.append(u['unique_id'])
             uid = u.get('uid') or u.get('unique_id')
             if not cid or cid in known or uid in people or u.get('unique_id') == acc or not is_request(text): continue
             people.add(uid)
@@ -128,6 +186,11 @@ def main(dry=False):
                             ts=c.get('create_time', 0), status='new', found=int(time.time()), uid=uid)); known.add(cid)
         state['videos'][vid] = n; time.sleep(0.8)
     if 'TEST' in globals(): new.append(TEST)
+    if TEST_INBOX:                                      # end-to-end test: a mock screenshot (stock faces, made-up names) + a typed @name
+        shot = os.path.join(WORK, 'shot_test' + uuid.uuid4().hex[:4] + '.png'); import shutil; shutil.copy(os.path.join(HERE, '..', 'tools', 'test', 'comments_mock.png'), shot)
+        add = os.path.join(WORK, 'add_test' + uuid.uuid4().hex[:4] + '.json'); json.dump({'handles': [TEST_INBOX]}, open(add, 'w'))
+        ST.upload(REL, [ST.seal(shot), ST.seal(add)])
+    if not PROCESS_ONLY: new += inbox(state, known, people)
     log(f'{len(new)} new requests')
     if dry:
         for e in new: log('request:', e['text'][:80])
@@ -163,6 +226,7 @@ def main(dry=False):
 REDO = '--redo' in sys.argv
 SCAN_ONLY = '--scan-only' in sys.argv          # read comments and update the list only (no models needed)
 PROCESS_ONLY = '--process-only' in sys.argv    # draw what is waiting, without reading comments again
+TEST_INBOX = sys.argv[sys.argv.index('--test-inbox') + 1] if '--test-inbox' in sys.argv else ''   # --test-inbox <account>
 if __name__ == '__main__':
     # --test <account> "<text>": also treat that account as having commented <text> (an end-to-end test on a known picture)
     if '--test' in sys.argv:
