@@ -119,8 +119,8 @@ def select_depth(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
         need = Lmin * (DP.D['depth_keep'] if cov > 0.5 else DP.D['depth_flat'] if cov < 0.05 else 1.0)
         if L >= need or (inface and L >= Lface):
             obj = int(labels[mid[1], mid[0]]) if labels is not None else 0
-            fl = (A['flow_face'] if inface else A['flow']) * (DP.D['depth_flow'] if cov > 0.5 else 1.0)
-            keep.append((HS.flow(s_, fl * level * f), obj))
+            fl = (A['flow_face'] if inface else A['flow']) * (DP.D['depth_flow'] if cov > DP.D['depth_shape_cov'] else 1.0)
+            keep.append((HS.flow(s_, fl * level * f) if fl > 0 else s_.astype(float), obj))
     return keep
 HS.select = select_depth
 _DEPTH = {}
