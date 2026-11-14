@@ -26,4 +26,4 @@ jobs:
         run: python -u engine/followers.py
       - name: started from the phone (login just saved) -> update the request list now, not in 10 min
         if: github.event_name == 'workflow_dispatch'
-        run: gh workflow run requests.yml -f fast=true
+        run: gh api -X POST repos/${{ github.repository }}/actions/workflows/requests.yml/dispatches -f ref=main -F "inputs[fast]=true"
