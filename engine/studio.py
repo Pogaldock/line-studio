@@ -207,8 +207,9 @@ def caption_png(text, path):
 # ---------- comment overlay (optional): a cropped comment screenshot floating over the video ----------
 # style = "<pos>-<size>-<fade>[-<align>]": pos top|mid|bottom (card centre at 30 / 50 / 70 % of the frame height, clear of
 # the caption and of TikTok's bottom bar), size s|m|l (a thumbnail: 30 / 40 / 52 % of the frame width), fade stay|out
-# (fades out over the last 25 % so the finished drawing ends clean), align left|center|right (5 % margin at the sides).
+# (out: only at the start, gone by COMMENT_GONE seconds, so it sets up the video and then leaves the drawing alone), align left|center|right (5 % margin at the sides).
 # The card gets rounded corners and a soft shadow, fades in at 0.3 s and bobs 8 px up and down every 3.2 s.
+COMMENT_GONE = 4.0
 CPOS = dict(top=0.30, mid=0.50, bottom=0.70); CSIZE = dict(s=0.30, m=0.40, l=0.52); CALIGN = ('left', 'center', 'right')
 def parse_cstyle(st):
     p = (st or 'bottom-s-out-left').split('-') + ['', '', '', '']
@@ -243,8 +244,8 @@ def overlay_pass(raw, capf, final, seconds, pr, comment=None, cstyle=''):
     ins = ['-i', raw, '-i', capf]; fc = '[0][1]overlay=0:0'
     if comment:
         card, x, y = comment_card(comment, os.path.splitext(capf)[0] + '_comment.png', cstyle)
-        dur = float(seconds) + 4; fade = 'fade=t=in:st=0.3:d=0.5:alpha=1'
-        if parse_cstyle(cstyle)[2] == 'out': fade += f',fade=t=out:st={0.75 * dur:.2f}:d=0.8:alpha=1'
+        dur = float(seconds) + 4; fade = 'fade=t=in:st=0.3:d=0.4:alpha=1'
+        if parse_cstyle(cstyle)[2] == 'out': fade += f',fade=t=out:st={COMMENT_GONE - 0.6:.2f}:d=0.6:alpha=1'
         ins += ['-loop', '1', '-t', f'{dur:.2f}', '-i', card]
         fc += f'[v];[2]format=rgba,{fade}[c];[v][c]overlay=x={x}:y={y}+8*sin(2*PI*t/3.2):shortest=1'
     p = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', *ins, '-filter_complex', fc, '-c:v', 'libx264', '-preset', 'veryfast',
