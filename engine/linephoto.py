@@ -69,6 +69,8 @@ def face_pass(img, a):
     log('face close-up pass on', n_ - 1, 'faces')
     return a
 
+MATTE_FIX = None   # set by explore.py: relative_matte (subject = whole frame on close-ups where background removal fails)
+
 def prep_for_lines(full):
     # what the line models see: background removed (subject matte), subject tone-normalised and lightly smoothed.
     # The video still shows the untouched photo.
@@ -81,6 +83,7 @@ def prep_for_lines(full):
         from PIL import Image
         m = np.array(remove(Image.fromarray(cv2.cvtColor(full, cv2.COLOR_BGR2RGB)), session=new_session('isnet-general-use'), only_mask=True)).astype(np.float32) / 255
         cv2.imwrite(f, (m * 255).astype(np.uint8))
+    if MATTE_FIX is not None: m = MATTE_FIX(full, m)          # optional correction when background removal fails
     SRC['matte'] = m
     ys, xs = np.nonzero(m > 0.5)
     if len(xs) > 100:

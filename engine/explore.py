@@ -34,6 +34,40 @@ def bowed(a, b, din, dout, bow):
 _raw_contour = LP._contour
 LP._contour = lambda img: LP._cache('idcontour', img, _raw_contour)
 
+# ---------- relative subject: background removal assumes a subject in front of a background. On close-ups (a face
+# filling the frame) it fails and marks almost nothing, so the face was treated as background: blurred before the line
+# model saw it, and only given sparse scene lines. The person detector is checked against it: when the matte covers
+# far less than the person (or almost nothing at all), the person is the subject, and when that fills most of the
+# frame the whole frame is. A normal matte is left exactly as it was (the locked look is unchanged).
+E.update(rel_subject=1)
+def relative_matte(full, m):
+    if not E['rel_subject']: return m
+    frac = float((m > 0.5).mean())
+    small = cv2.resize(full, (900, max(1, int(full.shape[0] * 900 / full.shape[1]))), interpolation=cv2.INTER_AREA)
+    keep_img = LP.SRC.get('img'); LP.SRC['img'] = small
+    try: pb = cv2.resize(LP.person_mask(small).astype(np.uint8), (full.shape[1], full.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+    finally:
+        if keep_img is None: LP.SRC.pop('img', None)
+        else: LP.SRC['img'] = keep_img
+    pf = float(pb.mean())
+    if frac >= 0.03 and not (pf > 0.5 and frac < 0.35 * pf): return m
+    if pf > 0.6 or (frac < 0.03 and pf == 0):
+        # the subject fills the frame: split it from the room behind by depth, at the level that separates this photo
+        # best (Otsu on the depth map); only if that gives no sensible split, the whole frame
+        d = DP.depth_map(full); d8 = (cv2.GaussianBlur(d, (0, 0), 3) * 255).astype(np.uint8)
+        t, near = cv2.threshold(d8, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        n_, lab_, st_, _ = cv2.connectedComponentsWithStats(near)
+        if n_ > 1:
+            big = 1 + int(np.argmax(st_[1:, cv2.CC_STAT_AREA])); near = (lab_ == big).astype(np.uint8)
+            near = cv2.morphologyEx(near, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+        cover = float(near.mean())
+        if 0.2 <= cover <= 0.95: out = cv2.GaussianBlur(near.astype(np.float32), (0, 0), 2); why = f'near part by depth ({100 * cover:.0f}% of the frame)'
+        else: out = np.ones_like(m); why = 'whole frame'
+    else: out = np.maximum(m, pb.astype(np.float32)); why = 'person area'
+    print(f'[relative subject] background removal kept {100 * frac:.0f}% of the photo, person covers {100 * pf:.0f}%: subject = {why}', flush=True)
+    return out
+LP.MATTE_FIX = relative_matte
+
 _orig_travel = HS.travel
 def travel_around(a, b, din, dout, W, H, rng, ink=None):
     if not E['avoid'] or ink is None: return _orig_travel(a, b, din, dout, W, H, rng, ink)
