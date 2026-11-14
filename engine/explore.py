@@ -40,10 +40,28 @@ LP._contour = lambda img: LP._cache('idcontour', img, _raw_contour)
 # model saw it, and only given sparse scene lines. The person detector is checked against it: when the matte covers
 # far less than the person (or almost nothing at all), the person is the subject, and when that fills most of the
 # frame the whole frame is. A normal matte is left exactly as it was (the locked look is unchanged).
-E.update(rel_subject=1)
+E.update(rel_subject=1, depth_subject=0)   # depth_subject=1: see relative_matte (drawings)
+def depth_near(full):
+    # the near part of the picture by depth (Otsu split of the depth map), largest piece, holes closed
+    d = DP.depth_map(full); d8 = (cv2.GaussianBlur(d, (0, 0), 3) * 255).astype(np.uint8)
+    t, near = cv2.threshold(d8, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    n_, lab_, st_, _ = cv2.connectedComponentsWithStats(near)
+    if n_ > 1:
+        big = 1 + int(np.argmax(st_[1:, cv2.CC_STAT_AREA])); near = (lab_ == big).astype(np.uint8)
+        near = cv2.morphologyEx(near, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+    return near
+
 def relative_matte(full, m):
     if not E['rel_subject']: return m
     frac = float((m > 0.5).mean())
+    if E['depth_subject'] and frac >= 0.03:
+        # drawings and other non-photos: background removal (trained on photos) often keeps only part of the subject (a head
+        # without its arm and jacket); the near shape by depth finds the whole figure. Used when it holds most of what
+        # background removal kept and is clearly bigger.
+        near = depth_near(full); cover = float(near.mean()); inside = float((near[m > 0.5] > 0).mean()) if frac > 0 else 0
+        if inside > 0.7 and cover > 1.6 * frac and cover < 0.8:
+            print(f'[relative subject] background removal kept {100 * frac:.0f}%: subject = near part by depth ({100 * cover:.0f}%)', flush=True)
+            return np.maximum(m, cv2.GaussianBlur(near.astype(np.float32), (0, 0), 2))
     small = cv2.resize(full, (900, max(1, int(full.shape[0] * 900 / full.shape[1]))), interpolation=cv2.INTER_AREA)
     keep_img = LP.SRC.get('img'); LP.SRC['img'] = small
     try: pb = cv2.resize(LP.person_mask(small).astype(np.uint8), (full.shape[1], full.shape[0]), interpolation=cv2.INTER_NEAREST) > 0

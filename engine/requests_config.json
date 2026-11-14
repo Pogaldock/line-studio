@@ -48,5 +48,5 @@
     "comment_style": "bottom-m-out-left"
   },
   "max_per_run": 8,
-  "more_options": "k,l,a,e,f,m"
+  "more_options": "u,k,l,a,e,f,m"
 }
