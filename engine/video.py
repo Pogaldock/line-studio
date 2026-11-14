@@ -188,8 +188,14 @@ def hand_pose(pen, wrist_w, c, S):
 def wrist_rest(pen, S, extra_rot=0.0):
     a = math.radians(BASE_ANG - extra_rot); ln = BASE_LEN * HS * (S / UNIT) / 2 / S
     return pen + ln * np.array([math.cos(a), math.sin(a)])
-_lo = np.percentile(pts, 0.5, axis=0) - 6; _hi = np.percentile(pts, 99.5, axis=0) + 6   # ink extent (ignores stray tails)
-C_INK = (_lo + _hi) / 2; Z_INK = min(0.84 * W / (_hi[0] - _lo[0]), 0.80 * H / (_hi[1] - _lo[1])) / UNIT
+_lo = np.percentile(pts, 0.2, axis=0) - 6; _hi = np.percentile(pts, 99.8, axis=0) + 6   # ink extent (ignores stray tails)
+# final view: the whole drawing inside TikTok's safe area, so the last frame works as a screenshot. Organic-feed margins
+# measured on 1080x1920 (Nov 2026): top 108 px (profile, Follow), bottom 320 px (caption, @name, sound), left 60 px,
+# right 120 px (like / comment / share). Top starts below our own caption instead (20 %); bottom keeps 22 % for long captions.
+SAFE = dict(left=60 / 1080, right=120 / 1080, top=0.20, bottom=0.22)
+_bx0, _bx1, _by0, _by1 = SAFE['left'] * W, W - SAFE['right'] * W, SAFE['top'] * H, H - SAFE['bottom'] * H
+C_INK = (_lo + _hi) / 2; Z_INK = min((_bx1 - _bx0) / (_hi[0] - _lo[0]), (_by1 - _by0) / (_hi[1] - _lo[1])) / UNIT
+C_END = C_INK - (np.array([(_bx0 + _bx1) / 2, (_by0 + _by1) / 2]) - [W / 2, H / 2]) / (UNIT * Z_INK)   # camera that puts the ink in the box
 # opening frame: about OPEN_SHOW of the subject in view (enough to tell what it is, not all of it), centred between
 # where the line starts and the middle of the drawing; the line is already moving on the first frame
 OPEN_SHOW = float(__import__('os').environ.get('OPEN_SHOW', '0.85'))
@@ -246,7 +252,7 @@ for name, dur in PHASES:
         else:                                                         # fade to white while centring the drawing itself
             e = ease(x) if name == 'to_white' else 1.0
             c0, _ = clamp_cam(C_PHOTO, Z_FULL)
-            plan.append((c0 + (C_INK - c0) * e, Z_FULL * (Z_INK / Z_FULL) ** e, 0.0, e, len(pts) - 1, None))
+            plan.append((c0 + (C_END - c0) * e, Z_FULL * (Z_INK / Z_FULL) ** e, 0.0, e, len(pts) - 1, None))
 log('planned', len(plan), 'frames', round(len(plan) / FPS, 1), 's')
 
 # ---------- camera glide: smooth the planned drawing-phase camera as a whole (no lurches against the photo edge) ----------

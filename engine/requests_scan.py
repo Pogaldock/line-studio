@@ -11,10 +11,11 @@
 #   job view, other options and re-renders work as for any photo.
 # Usage: python3 requests_scan.py [--dry] [--redo] [--test <account> "<text>"]
 #   --redo: process every request not marked posted again (after a change to the look), removing test entries
+#   --scan-only / --process-only: the two halves, for the 10-minute workflow (light scan, heavy job only when needed)
 #   --dry: list the requests found, process nothing; --test: add that account as a request (end-to-end test)
 import os, sys, re, json, time, base64, subprocess, unicodedata, uuid, datetime, numpy as np, cv2
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
-import studio as ST, pfpcheck as K
+import studio as ST, pfpcheck as K       # both import only numpy/cv2 at the top: fine in the light environment
 CFG = json.load(open(os.path.join(HERE, 'requests_config.json')))
 REL = 'requests'; WORK = os.path.abspath('reqwork'); os.makedirs(WORK, exist_ok=True)
 T0 = time.time()
@@ -114,15 +115,17 @@ def process(e, avatar, f):
 def main(dry=False):
     acc = CFG['account']; state = load('requests.json.enc', {'requests': [], 'videos': {}})
     state['account'] = acc; state['scanned'] = int(time.time())
-    known = {e['cid'] for e in state['requests']}; vids = videos(acc); log(f'{len(vids)} videos on @{acc}')
+    known = {e['cid'] for e in state['requests']}; people = {e.get('uid') or e['handle'] for e in state['requests']}; vids = {} if PROCESS_ONLY else videos(acc); log(f'{len(vids)} videos on @{acc}')
     new = []
     for vid, n in vids.items():
         if n == 0 or state['videos'].get(vid) == n: continue                # nothing new under this video since last run
         for c in comments(vid):
             u = c.get('user') or {}; cid = c.get('cid'); text = c.get('text') or ''
-            if not cid or cid in known or u.get('unique_id') == acc or not is_request(text): continue
+            uid = u.get('uid') or u.get('unique_id')
+            if not cid or cid in known or uid in people or u.get('unique_id') == acc or not is_request(text): continue
+            people.add(uid)
             new.append(dict(cid=cid, vid=vid, handle=u.get('unique_id', ''), nick=u.get('nickname', ''), text=text[:300],
-                            ts=c.get('create_time', 0), status='new', found=int(time.time()))); known.add(cid)
+                            ts=c.get('create_time', 0), status='new', found=int(time.time()), uid=uid)); known.add(cid)
         state['videos'][vid] = n; time.sleep(0.8)
     if 'TEST' in globals(): new.append(TEST)
     log(f'{len(new)} new requests')
@@ -136,6 +139,10 @@ def main(dry=False):
             if e['cid'] not in posted: e.update(status='new', reason='', job='', rid='')
     state['requests'] += new; save(state)
     todo = [e for e in state['requests'] if e['status'] == 'new'][:int(CFG['max_per_run'])]
+    if SCAN_ONLY:                                       # light job: tell the workflow whether the drawing job is needed
+        log(f'{len(todo)} waiting to be drawn')
+        if os.environ.get('GITHUB_OUTPUT'): open(os.environ['GITHUB_OUTPUT'], 'a').write(f'pending={len(todo)}\n')
+        return
     for e in todo:
         try:
             url = big_avatar(e['handle']); r = url and http(url)
@@ -154,6 +161,8 @@ def main(dry=False):
         finally: save(state)
 
 REDO = '--redo' in sys.argv
+SCAN_ONLY = '--scan-only' in sys.argv          # read comments and update the list only (no models needed)
+PROCESS_ONLY = '--process-only' in sys.argv    # draw what is waiting, without reading comments again
 if __name__ == '__main__':
     # --test <account> "<text>": also treat that account as having commented <text> (an end-to-end test on a known picture)
     if '--test' in sys.argv:
