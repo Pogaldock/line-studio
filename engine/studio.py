@@ -108,16 +108,20 @@ def trace(args):
     work = os.path.abspath(args.workdir); os.makedirs(work, exist_ok=True)
     opts = json.load(open(os.path.join(HERE, 'options.json')))['options']
     if args.only: opts = [o for o in opts if o['id'] in args.only.split(',')]      # e.g. requests: only the no-crop options
+    prev = []
+    if args.append and os.path.exists(os.path.join(work, 'progress_trace.json')):   # more options into a traced job: keep the done ones listed
+        prev = [o for o in json.load(open(os.path.join(work, 'progress_trace.json'))).get('options', []) if o['id'] not in {x['id'] for x in opts}]
     pr = Progress(work, args.tag, 'trace', 'progress_trace.json')
-    pr.d['options'] = [dict(id=o['id'], name=o['name'], note=o.get('note', ''), state='queued', pct=0) for o in opts]
+    pr.d['options'] = prev + [dict(id=o['id'], name=o['name'], note=o.get('note', ''), state='queued', pct=0) for o in opts]
     log = open(os.path.join(work, 'trace.log'), 'a')
     crops = [o for o in opts if o.get('crop', True)]; wholes = [o for o in opts if not o.get('crop', True)]
     leads = [g[0]['id'] for g in (crops, wholes) if g]; rest = [o['id'] for o in crops[1:] + wholes[1:]]
     # overall bar, split by measured time: crop 0-12 %, the first option of each image 12-80 %, the others 80-100 %
     def overall(stage=None):
         pc = {o['id']: o.get('pct', 0) for o in pr.d['options']}
+        n_prev = len(prev)
         lead = sum(pc[i] for i in leads) / max(len(leads), 1); rst = sum(pc[i] for i in rest) / max(len(rest), 1) if rest else 100
-        n_done = sum(o['state'] == 'done' for o in pr.d['options'])
+        n_done = sum(o['state'] == 'done' for o in pr.d['options']) - n_prev
         pct = 12 + 68 * lead / 100 + 20 * rst / 100 if rest else 12 + 88 * lead / 100
         pr.set(stage=stage or (f'{n_done} of {len(opts)} options ready' if n_done else 'tracing the options'), pct=pct)
     try:
@@ -315,6 +319,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest='cmd', required=True)
     a = sp.add_parser('trace'); a.add_argument('photo'); a.add_argument('workdir'); a.add_argument('--tag')
     a.add_argument('--only', default='', help='comma-separated option ids (default: all)')
+    a.add_argument('--append', action='store_true', help='add to a job already traced in this workdir (its options stay listed)')
     b = sp.add_parser('render'); b.add_argument('workdir'); b.add_argument('option'); b.add_argument('caption')
     b.add_argument('--seconds', type=float, default=26); b.add_argument('--ink', type=float, default=1.0); b.add_argument('--tag')
     b.add_argument('--comment', default='', help='encrypted comment crop asset (comment_*.png.enc) in the workdir'); b.add_argument('--cstyle', default='')

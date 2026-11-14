@@ -1,7 +1,7 @@
 # Request list: every 10 minutes a light job reads the comments on the account's videos (no AI models, ~30 s); only when
-# a request is waiting does the drawing job start (models, ~2 min per request, at most 10 per run).
+# a request is waiting does the drawing job start (models, ~4 min per request with the extra options, at most 8 per run).
 # engine/requests_scan.py, settings in engine/requests_config.json. State and every image encrypted (release "requests",
-# job-<id> releases). Limits: scan 10 min, draw 40 min. From the phone (fast=true): one job does both (~2 min to a video).
+# job-<id> releases). Limits: scan 10 min, draw 60 min. From the phone (fast=true): one job does both (~2 min to a video).
 name: requests
 run-name: requests${{ inputs.test_account && format(' (test {0})', inputs.test_account) || '' }}${{ inputs.redo && ' (redo)' || '' }}
 on:
@@ -43,7 +43,7 @@ jobs:
     needs: scan
     if: needs.scan.outputs.pending != '0' && needs.scan.outputs.pending != ''
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
     # added from the phone: read the inbox and draw in the same job (one runner wait, one setup)
     if: ${{ inputs.fast }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
     steps:
       - uses: actions/checkout@v4

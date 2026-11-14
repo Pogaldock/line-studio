@@ -204,9 +204,10 @@ def main(dry=False):
             if e['cid'] not in posted: e.update(status='new', reason='', job='', rid='')
     state['requests'] += new; save(state)
     todo = [e for e in state['requests'] if e['status'] == 'new'][:int(CFG['max_per_run'])]
+    extra = [e for e in state['requests'] if e.get('job') and e['status'] in ('ready', 'skipped') and not e.get('more') and e.get('more_tries', 0) < 2] if CFG.get('more_options') else []
     if SCAN_ONLY:                                       # light job: tell the workflow whether the drawing job is needed
-        log(f'{len(todo)} waiting to be drawn')
-        if os.environ.get('GITHUB_OUTPUT'): open(os.environ['GITHUB_OUTPUT'], 'a').write(f'pending={len(todo)}\n')
+        log(f'{len(todo)} waiting to be drawn, {len(extra)} waiting for more options')
+        if os.environ.get('GITHUB_OUTPUT'): open(os.environ['GITHUB_OUTPUT'], 'a').write(f'pending={len(todo) + len(extra)}\n')
         return
     for e in todo:
         try:
@@ -221,9 +222,21 @@ def main(dry=False):
             if not ok: e.update(status='skipped', reason=why); continue
             st, why, jid, rid = process(e, im, f)
             e.update(status=st, reason=why, job=jid, rid=rid); log(st, jid, why)
+            if jid and CFG.get('more_options'):              # video first; then more drawings to choose from, in the same job
+                save(state); w = os.path.join(WORK, jid, 'work')
+                r = subprocess.run([sys.executable, os.path.join(HERE, 'studio.py'), 'trace', os.path.join(WORK, jid, 'photo.jpg.enc'), w, '--tag', 'job-' + jid,
+                                    '--only', CFG['more_options'], '--append'])
+                log('more options', 'ready' if r.returncode == 0 else 'failed', jid); e['more'] = r.returncode == 0
         except Exception as ex:
             e.update(status='failed', reason=str(ex)[-200:]); log('failed:', ex)
         finally: save(state)
+    for e in extra[:int(CFG['max_per_run'])]:          # earlier requests made before more_options existed (or whose extra trace failed)
+        jid = e['job']; w = os.path.join(WORK, jid, 'work'); os.makedirs(w, exist_ok=True)
+        for n in ('photo.jpg.enc', 'progress_trace.json'):
+            subprocess.run(['gh', 'release', 'download', 'job-' + jid, '-p', n, '-D', w if n.endswith('.json') else os.path.join(WORK, jid), '--clobber'], capture_output=True)
+        r = subprocess.run([sys.executable, os.path.join(HERE, 'studio.py'), 'trace', os.path.join(WORK, jid, 'photo.jpg.enc'), w, '--tag', 'job-' + jid,
+                            '--only', CFG['more_options'], '--append'])
+        e['more'] = r.returncode == 0; e['more_tries'] = e.get('more_tries', 0) + 1; log('more options for an earlier request:', 'ready' if e['more'] else 'failed', jid); save(state)
 
 REDO = '--redo' in sys.argv
 SCAN_ONLY = '--scan-only' in sys.argv          # read comments and update the list only (no models needed)

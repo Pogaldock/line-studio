@@ -1,5 +1,5 @@
 {
-  "_about": "Settings for the automatic request list (requests_scan.py, checked every 10 minutes by .github/workflows/requests.yml). account: the TikTok account whose video comments are read. phrases: a comment counts as a request when it contains one of these (lowercase, accents ignored; matched as whole words). options: the drawings traced for each request (just the video's own by default: fastest; add k,l for more choice). video: the one rendered ready to post. max_per_run: requests processed per run (about 2 min each). Single words (moi, mine, my, ...) catch any comment pointing at the commenter. Each person is drawn once: later comments from someone already in the list are ignored.",
+  "_about": "Settings for the automatic request list (requests_scan.py, checked every 10 minutes by .github/workflows/requests.yml). account: the TikTok account whose video comments are read. phrases: a comment counts as a request when it contains one of these (lowercase, accents ignored; matched as whole words). options: traced before the video (just the video's own: fastest). more_options: traced right after the video is ready, in the same job, so other looks can be picked and rendered from the phone. video: the one rendered ready to post. max_per_run: requests processed per run (about 2 min each). Single words (moi, mine, my, ...) catch any comment pointing at the commenter. Each person is drawn once: later comments from someone already in the list are ignored.",
   "account": "perceptual.engineering",
   "phrases": [
     "draw me",
@@ -47,5 +47,6 @@
     "seconds": 26,
     "comment_style": "bottom-m-out-left"
   },
-  "max_per_run": 10
+  "max_per_run": 8,
+  "more_options": "k,l,a,e,f,m"
 }
