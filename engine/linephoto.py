@@ -81,7 +81,8 @@ def prep_for_lines(full):
     else:
         from rembg import remove, new_session
         from PIL import Image
-        m = np.array(remove(Image.fromarray(cv2.cvtColor(full, cv2.COLOR_BGR2RGB)), session=new_session('isnet-general-use'), only_mask=True)).astype(np.float32) / 255
+        if 'rembg' not in _SESS: _SESS['rembg'] = new_session('isnet-general-use')
+        m = np.array(remove(Image.fromarray(cv2.cvtColor(full, cv2.COLOR_BGR2RGB)), session=_SESS['rembg'], only_mask=True)).astype(np.float32) / 255
         cv2.imwrite(f, (m * 255).astype(np.uint8))
     if MATTE_FIX is not None: m = MATTE_FIX(full, m)          # optional correction when background removal fails
     SRC['matte'] = m
@@ -113,11 +114,18 @@ def upscale(img):
     out = cv2.cvtColor((y[0].permute(1, 2, 0).clamp(0, 1).numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imwrite(f, out); log('upscaled', img.shape[1], 'x', img.shape[0], '->', out.shape[1], 'x', out.shape[0]); return out
 
+# models stay loaded for the life of the process (a trace of many options, or a live run of many pictures)
+_SESS = {}
+def _pose(YOLO):
+    if 'pose' not in _SESS: _SESS['pose'] = YOLO(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'yolov8n-pose.pt'))
+    return _SESS['pose']
+
 def contour(img): return _cache('contour', img, _contour)
 def _contour(img):
     import onnxruntime as ort
     f = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'id_contour_1024.onnx')
-    s = ort.InferenceSession(f, providers=['CPUExecutionProvider'])
+    if 'contour' not in _SESS: _SESS['contour'] = ort.InferenceSession(f, providers=['CPUExecutionProvider'])
+    s = _SESS['contour']
     src = SRC.get('full', img); h, w = src.shape[:2]; side = max(h, w)
     sq = np.full((side, side, 3), np.median(src.reshape(-1, 3), axis=0), np.uint8)   # pad to a square (no stretching)
     oy, ox = (side - h) // 2, (side - w) // 2; sq[oy:oy + h, ox:ox + w] = src
@@ -285,7 +293,8 @@ def _segment_objects(img):
     except ImportError:
         log('no ultralytics: falling back to position-only sections'); return None
     here = os.path.dirname(os.path.abspath(__file__))
-    m = FastSAM(os.path.join(here, 'models', 'FastSAM-s.pt'))
+    if 'fastsam' not in _SESS: _SESS['fastsam'] = FastSAM(os.path.join(here, 'models', 'FastSAM-s.pt'))
+    m = _SESS['fastsam']
     r = m(img, imgsz=640, conf=0.4, iou=0.9, retina_masks=True, verbose=False)[0]
     if r.masks is None: return None
     mk = r.masks.data.numpy().astype(bool); H_, W_ = img.shape[:2]
@@ -306,7 +315,7 @@ def _person_mask(img):
     m = np.zeros(img.shape[:2], bool)
     try:
         from ultralytics import YOLO
-        r = YOLO(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'yolov8n-pose.pt'))(img, verbose=False)[0]
+        r = _pose(YOLO)(img, verbose=False)[0]
         for b in (r.boxes.xyxy.numpy() if r.boxes is not None else []):
             x0, y0, x1, y1 = [int(v) for v in b]; m[max(0, y0):y1, max(0, x0):x1] = True
     except Exception as e: log('person boxes unavailable:', e)
@@ -324,7 +333,7 @@ def _focus_map(img):
     H_, W_ = img.shape[:2]; F = np.ones((H_, W_), np.float32)
     try:
         from ultralytics import YOLO
-        r = YOLO(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'yolov8n-pose.pt'))(img, verbose=False)[0]
+        r = _pose(YOLO)(img, verbose=False)[0]
         kp = r.keypoints.xy.numpy() if r.keypoints is not None else np.zeros((0, 17, 2)); cf = r.keypoints.conf.numpy() if r.keypoints is not None and r.keypoints.conf is not None else np.ones(kp.shape[:2])
     except Exception as e:
         log('pose model unavailable:', e); kp = np.zeros((0, 17, 2)); cf = np.zeros((0, 17))

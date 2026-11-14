@@ -6,7 +6,7 @@
 #   the first picture also pays for loading the models (reported separately as "cold").
 import sys, os, json, time, shutil, copy, numpy as np, cv2
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE); CWD = os.getcwd(); os.chdir(HERE)
-OPTS = ['e', 'a', 'q']                                   # Minimal (free tier), Detailed, Close-up clean (gift tiers)
+OPTS = os.environ.get('OPTS', 't,a').split(',')         # t = Profile picture (the live's option), a = Detailed for comparison
 T0 = time.time()
 import explore as EX, hydrant_style as HS, linephoto as LP, depth as DP, route as RT
 t_import = time.time() - T0

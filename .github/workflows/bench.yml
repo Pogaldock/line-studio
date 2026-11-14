@@ -15,7 +15,7 @@ jobs:
       - name: test faces (free Pexels portraits, listed by the gaunernst/pexels-portrait dataset), square 720 px like a pfp
         run: |
           mkdir -p faces
-          curl -sSf "https://datasets-server.huggingface.co/rows?dataset=gaunernst/pexels-portrait&config=default&split=train&offset=40&length=9" \
+          curl -sSf "https://datasets-server.huggingface.co/rows?dataset=gaunernst/pexels-portrait&config=default&split=train&offset=40&length=12" \
             | ~/venv/bin/python -c "import sys,json; [print(r['row']['src']) for r in json.load(sys.stdin)['rows']]" > urls.txt
           i=0; while read u; do curl -sSfL -o faces/f$i.jpg "${u%%\?*}?auto=compress&w=1000"; i=$((i+1)); done < urls.txt
           ~/venv/bin/python - <<'PY'
