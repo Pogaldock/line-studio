@@ -9,7 +9,7 @@
 #   {"status": "ok" | "no-login" | "login-expired" | "error", "checked": unix time, "msg": "...",
 #    "list": [{"uid", "unique_id", "nickname"}, ...] newest first}
 # engine/requests_scan.py reads it: new followers become requests, their display names are learned for screenshots.
-import os, sys, json, time, base64, subprocess, tempfile
+import os, re, sys, json, time, base64, subprocess, tempfile
 
 REL = 'requests'
 ACC = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'requests_config.json')))['account']
@@ -53,9 +53,11 @@ def cookies(raw):
 
 def read(cs):
     from playwright.sync_api import sync_playwright
-    got, seen = [], set()
+    got, seen, scenes = [], set(), set()
     def on_response(r):
         if '/api/user/list/' not in r.url: return
+        scenes.add(re.search(r'scene=(\d+)', r.url).group(1) if 'scene=' in r.url else '?')
+        if 'scene=67' not in r.url: return                                   # 67 = followers (21 = following, e.g. the sidebar)
         try: d = r.json()
         except Exception: return
         for it in d.get('userList') or []:
@@ -71,14 +73,14 @@ def read(cs):
             pg.goto(f'https://www.tiktok.com/@{ACC}', wait_until='domcontentloaded', timeout=60000); pg.wait_for_timeout(6000)
             if pg.locator('[data-e2e="top-login-button"]').count(): return 'login-expired', 'TikTok shows the page as logged out', got, pg.screenshot()
             pg.locator('[data-e2e="followers-count"]').first.click(timeout=15000); pg.wait_for_timeout(4000)
-            tab = pg.locator('[role="dialog"] >> text=/^Followers/').first           # the list opens on the tab clicked; make sure
-            if tab.count(): tab.click(); pg.wait_for_timeout(3000)
+            # clicking the followers count opens the list on the Followers tab already: no tab click
             n, still = 0, 0
             while len(got) < MAX and still < 4:                                    # scroll the list: each page of 30 loads as it is reached
                 box = pg.locator('[role="dialog"]').first.bounding_box()
                 if box: pg.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] * 0.7)
                 pg.mouse.wheel(0, 3000); pg.wait_for_timeout(1500)
                 still = still + 1 if len(got) == n else 0; n = len(got)
+            log('list requests seen, by scene:', sorted(scenes))
             if not got: return 'error', 'the follower list did not load', got, pg.screenshot()
             return 'ok', '', got, None
         except Exception as e:
