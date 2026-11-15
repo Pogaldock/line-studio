@@ -67,7 +67,7 @@ def tidy(state, done):
     vid_of = {}
     for e in rs:
         v = e.get('posted_vid') or done_vid(e, done) or ('phone' if e['cid'] in marked else '')
-        if v and e.get('handle'): vid_of.setdefault(e['handle'].lower(), v)
+        if v and e.get('handle') and vid_of.get(e['handle'].lower(), 'phone') == 'phone': vid_of[e['handle'].lower()] = v   # a real video beats "marked on the phone"
     first = {}
     for e in sorted(rs, key=lambda e: (not (e.get('posted_vid') or e['cid'] in marked), not e.get('job'), e.get('found', 0))):
         h = (e.get('handle') or '').lower()
