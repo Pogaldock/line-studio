@@ -358,7 +358,8 @@ HS.scene_lines = lambda *a, **k: [] if E['budget'] else _scene0(*a, **k)   # in 
 def cartoon_faces(img):
     # anime / cartoon faces (lbpcascade_animeface, nagadomi, MIT): the pose model only finds real people
     if 'anime' not in _BUD:
-        f = os.path.join(HERE, 'models', 'lbpcascade_animeface.xml'); _BUD['anime'] = cv2.CascadeClassifier(f) if os.path.exists(f) else None
+        f = os.path.join(HERE, 'models', 'lbpcascade_animeface.xml')
+        _BUD['anime'] = cv2.CascadeClassifier(f) if os.path.exists(f) and hasattr(cv2, 'CascadeClassifier') else None   # gone in OpenCV 5
     m = np.zeros(img.shape[:2], np.uint8)
     if _BUD['anime'] is None or _BUD['anime'].empty(): return m
     g = cv2.equalizeHist(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)); mn = int(0.08 * min(img.shape[:2]))
