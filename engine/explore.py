@@ -147,7 +147,7 @@ def silhouette(W, H, level):
 
 _sel_prev = HS.select
 def select_outline(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
-    if not E['outline']: return _sel_prev(strokes, level, U, W, H, inside, face, labels, lscale)
+    if not (E['outline'] or E.get('budget')): return _sel_prev(strokes, level, U, W, H, inside, face, labels, lscale)
     ol, dist = silhouette(W, H, level)
     def along(s):
         ix = np.clip(np.round(s).astype(int), 0, [W - 1, H - 1]); return (dist[ix[:, 1], ix[:, 0]] < E['ol_near']).mean() > 0.6
@@ -345,7 +345,8 @@ HS.select = select_wobble
 #   inside a region, lines are taken best first: lines along the region's own outline first (so each object reads),
 #            then long smooth lines; texture (lines that turn a lot, or sit in a crowd of other lines) last
 # The style's length search still sets the total: allowed line = (all candidate line) / 2 / lscale.
-E.update(budget=0, b_face=0.35, b_hand=0.10, b_bg=0.10, b_min=0.05, b_cand=0.45, b_turn=0.25, b_tex=2.0, b_crowd=1.0, b_edge=1.5)
+E.update(budget=0, b_face=0.35, b_hand=0.10, b_bg=0.10, b_min=0.05, b_cand=0.45, b_turn=0.25, b_tex=2.0, b_crowd=1.0, b_edge=1.5,
+         b_anime=0.3, b_rep=1.5, b_texcap=0.25, b_halo=0.03, b_bgL=0.06, b_sil=1.7, b_bgw=0.6)
 _BUD = {}
 _CHAIN = []
 _chain0 = HS.chain_strokes
@@ -356,16 +357,48 @@ _scene0 = HS.scene_lines
 HS.scene_lines = lambda *a, **k: [] if E['budget'] else _scene0(*a, **k)   # in budget mode the scene is in the pool
 
 def cartoon_faces(img):
-    # anime / cartoon faces (lbpcascade_animeface, nagadomi, MIT): the pose model only finds real people
-    if 'anime' not in _BUD:
-        f = os.path.join(HERE, 'models', 'lbpcascade_animeface.xml')
-        _BUD['anime'] = cv2.CascadeClassifier(f) if os.path.exists(f) and hasattr(cv2, 'CascadeClassifier') else None   # gone in OpenCV 5
+    # drawn / anime / cartoon faces: deepghs anime_face_detection v1.4_n (YOLOv8, MIT); the pose model only finds real
+    # people. Measured on 10 recent pfps: finds the face on the drawn ones (sketch 0.65, anime 0.6-0.8), ~0 on photos.
     m = np.zeros(img.shape[:2], np.uint8)
-    if _BUD['anime'] is None or _BUD['anime'].empty(): return m
-    g = cv2.equalizeHist(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)); mn = int(0.08 * min(img.shape[:2]))
-    for x, y, w, h in _BUD['anime'].detectMultiScale(g, 1.1, 5, minSize=(mn, mn)):
-        cv2.ellipse(m, (int(x + w / 2), int(y + h * 0.55)), (int(w * 0.55), int(h * 0.6)), 0, 0, 360, 1, -1)
+    if 'anime' not in _BUD:
+        f = os.path.join(HERE, 'models', 'anime_face.onnx')
+        try:
+            import onnxruntime as ort; _BUD['anime'] = ort.InferenceSession(f, providers=['CPUExecutionProvider']) if os.path.exists(f) else None
+        except Exception as e: getattr(HS, 'log', print)('anime face model unavailable:', e); _BUD['anime'] = None
+    if _BUD['anime'] is None: return m
+    h, w = img.shape[:2]; S = 640; r = S / max(h, w)
+    pad = np.full((S, S, 3), 114, np.uint8); pad[:int(h * r), :int(w * r)] = cv2.resize(img, (int(w * r), int(h * r)))
+    o = _BUD['anime'].run(None, {'images': pad[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255})[0][0]
+    if o.shape[0] != 5: o = o.T
+    boxes = []
+    for k in np.argsort(-o[4]):
+        if o[4, k] < E['b_anime']: break
+        cx, cy, bw, bh = o[:4, k] / r
+        if all(abs(cx - x) > (bw + w_) / 3 or abs(cy - y) > (bh + h_) / 3 for x, y, w_, h_ in boxes): boxes.append((cx, cy, bw, bh))
+    for cx, cy, bw, bh in boxes[:4]: cv2.ellipse(m, (int(cx), int(cy)), (int(bw * 0.5), int(bh * 0.55)), 0, 0, 360, 1, -1)
+    getattr(HS, 'log', print)('drawn faces found:', len(boxes))
     return m
+
+def repetition(cand, W, H):
+    # texture = many strokes running PARALLEL close together (hatching, fur, hair): every candidate stroke is painted
+    # into one of 8 direction maps; at each point of a stroke, the blurred map of its own direction says how much other
+    # line runs the same way nearby. Its own contribution is taken off, so a lone long contour scores ~0.
+    nb = 8; sig = 0.012 * W; maps = np.zeros((nb, H, W), np.float32); dirs = []
+    for c_, _ in cand:
+        q = np.asarray(c_, float); d = np.gradient(q, axis=0); a = (np.arctan2(d[:, 1], d[:, 0]) % np.pi) / np.pi * nb
+        b = np.clip(a.astype(int), 0, nb - 1); dirs.append(b)
+        ix = np.clip(np.round(q).astype(int), 0, [W - 1, H - 1])
+        for k in range(nb):
+            sel = ix[b == k]
+            if len(sel): maps[k][sel[:, 1], sel[:, 0]] = 1.0
+    self_ = 1.0 / (2 * math.pi * sig * sig) * (2.5 * sig)        # roughly what a lone line adds to its own blurred map
+    for k in range(nb): maps[k] = cv2.GaussianBlur(maps[k], (0, 0), sig)
+    out = []
+    for (c_, _), b in zip(cand, dirs):
+        ix = np.clip(np.round(np.asarray(c_)).astype(int), 0, [W - 1, H - 1])
+        v = maps[b, ix[:, 1], ix[:, 0]] + 0.5 * (maps[(b + 1) % nb, ix[:, 1], ix[:, 0]] + maps[(b - 1) % nb, ix[:, 1], ix[:, 0]])
+        out.append(max(0.0, float(np.median(v)) / self_ - 1.0))  # ~ how many other parallel lines run alongside
+    return out
 
 def regions(W, H, inside, face, labels):
     key = (W, H, id(labels))
@@ -405,21 +438,30 @@ def select_budget(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
         for r in np.unique(R):                                 # each region's own outline
             m = (R == r).astype(np.uint8); b = m - cv2.erode(m, np.ones((3, 3), np.uint8))
             edge[r] = cv2.distanceTransform(1 - b, cv2.DIST_L2, 3) < 0.008 * W
+        sil = {id(x) for x in silhouette(W, H, level)[0]}          # the character's outline: always drawn, first
+        _BUD['sil'] = [(c_, o_) for c_, o_ in cand if id(c_) in sil]; cand = [(c_, o_) for c_, o_ in cand if id(c_) not in sil]
+        rep = repetition(cand, W, H)
+        mt = cv2.resize(LP.SRC['matte'], (W, H), interpolation=cv2.INTER_AREA) > 0.5 if LP.SRC.get('matte') is not None else inside
+        mb = mt.astype(np.uint8) - cv2.erode(mt.astype(np.uint8), np.ones((3, 3), np.uint8))
+        to_sil = cv2.distanceTransform(1 - mb, cv2.DIST_L2, 3)
         items = []
-        for c_, obj in cand:
+        for (c_, obj), rp in zip(cand, rep):
             ix = np.clip(np.round(c_).astype(int), 0, [W - 1, H - 1]); rr = R[ix[:, 1], ix[:, 0]]
             r = int(np.bincount(rr + 2).argmax() - 2); L = LP.arclen(c_)
+            if r == -2:                                        # background: outlines of things only, never texture,
+                if rp > 1.0 or L < E['b_bgL'] * W: continue      # and a gap around the character so it stands out
+                if (to_sil[ix[:, 1], ix[:, 0]] < E['b_halo'] * W).mean() > 0.2: continue
             on_edge = float(edge[r][ix[:, 1], ix[:, 0]].mean()); tex = max(0.0, turning(c_) - E['b_turn'])
-            score = L ** 0.7 * (1 + E['b_edge'] * on_edge) / (1 + E['b_tex'] * tex) / (1 + E['b_crowd'] * max(0.0, float(crowd[ix[:, 1], ix[:, 0]].mean()) - 1))
-            items.append((r, score, L, c_, obj))
+            score = L ** 0.7 * (1 + E['b_edge'] * on_edge) / (1 + E['b_tex'] * tex) / (1 + E['b_crowd'] * max(0.0, float(crowd[ix[:, 1], ix[:, 0]].mean()) - 1)) / (1 + E['b_rep'] * rp)
+            items.append((r, score, L, c_, obj, rp > 1.5))
         area = {r: float((R == r).mean()) for r in np.unique(R)}
-        _BUD.update(ckey=key, items=items, area=area, total=sum(i[2] for i in items))
+        _BUD.update(ckey=key, items=items, area=area, total=sum(i[2] for i in items), silL=sum(LP.arclen(c_) for c_, _ in _BUD['sil']))
         log_ = getattr(HS, 'log', print)
         log_(f'budget level {level}: {len(items)} candidate lines in {len(area)} regions')
     items, area = _BUD['items'], _BUD['area']
-    allowed = _BUD['total'] / 2.0 / lscale
+    allowed = max(0.0, (_BUD['total'] + _BUD['silL']) / 2.0 / lscale - _BUD['silL'])
     have = {}
-    for r, _, L, _, _ in items: have[r] = have.get(r, 0.0) + L
+    for r, _, L, _, _, _ in items: have[r] = have.get(r, 0.0) + L
     rs = [r for r in have]
     w = {}
     for r in rs:
@@ -441,13 +483,14 @@ def select_budget(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
         left = 0.0
         for r in list(open_):
             if share[r] >= have[r]: left += share[r] - have[r]; share[r] = have[r]; open_.discard(r)
-    keep = []
+    keep = list(_BUD['sil'])
     for r in rs:
-        got = 0.0
-        for _, sc, L, c_, obj in sorted([i for i in items if i[0] == r], key=lambda t: -t[1]):
+        got = tx = 0.0
+        for _, sc, L, c_, obj, tex_ in sorted([i for i in items if i[0] == r], key=lambda t: -t[1]):
             if got >= share[r]: break
             if got + L > share[r] * 1.3 and got > 0: continue
-            keep.append((c_, obj)); got += L
+            if tex_ and tx + L > E['b_texcap'] * share[r]: continue     # texture: only a few strokes of it per region
+            keep.append((c_, obj)); got += L; tx += L if tex_ else 0.0
     return keep
 HS.select = select_budget
 
@@ -477,6 +520,12 @@ def darkness_widths(photo, outdir):
                 dist[i] = min(dist[i], last - cum[i])
             t = np.clip(dist / 6.0, 0, 1)
             r = np.where(wk, r * (1 - t) + np.minimum(r, hair) * t, r).astype(np.float32)
+        if E['budget'] and LP.SRC.get('matte') is not None:   # the character's outline bold, the background lighter
+            mt = (cv2.resize(LP.SRC['matte'], (W, H), interpolation=cv2.INTER_AREA) > 0.5).astype(np.uint8)
+            dist = cv2.distanceTransform(1 - (mt - cv2.erode(mt, np.ones((3, 3), np.uint8))), cv2.DIST_L2, 3)
+            near = dist[ix[:, 1], ix[:, 0]] < 0.006 * W; out = mt[ix[:, 1], ix[:, 0]] == 0
+            g = np.where(wk, 1.0, np.where(near, E['b_sil'], np.where(out, E['b_bgw'], 1.0))).astype(np.float32)
+            r = (r * cv2.GaussianBlur(g.reshape(-1, 1), (1, 0), 4).ravel()).astype(np.float32)
         np.save(os.path.join(outdir, f'widths_d{dd}.npy'), r)
         meta = dict(nib_scale=LP.P['nib_scale'], px_per_unit=W / 500.0)
         if E['quiet_joins'] and wk.any() and (~wk).any(): meta['quiet'] = round(hair, 4)   # humanize keeps joins at this width
