@@ -22,13 +22,17 @@ jobs:
   run:
     needs: plan
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy: { fail-fast: false, matrix: { group: "${{ fromJSON(needs.plan.outputs.groups) }}" } }
     env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { models: "true" }
+      - name: test-only libraries (other line models, CLIP)
+        run: |
+          ~/venv/bin/pip install -q controlnet_aux==0.0.10 open_clip_torch==3.2.0
+          ~/venv/bin/pip uninstall -y -q opencv-python || true; ~/venv/bin/pip install -q --force-reinstall --no-deps opencv-python-headless==5.0.0.93
       - name: trace and compare
         run: |
           gh release view compare > /dev/null 2>&1 || gh release create compare --title compare --notes "encrypted comparison sheets" > /dev/null

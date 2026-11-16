@@ -494,6 +494,91 @@ def select_budget(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
     return keep
 HS.select = select_budget
 
+# ---------- line source (linesrc=hed|pidi|teed|coarse, ls_face=1) ----------
+# The line model decides what the drawing can contain. The current one (informative drawings, contour style) traces every
+# edge, shading and texture included. Soft-edge models trained on object boundaries (HED, Xie & Tu 2015; PiDiNet, Su et
+# al. 2021) give the structure as bold smooth shapes and mostly skip fur, curls and hatching, but soften small features.
+# ls_face=1 keeps the current model's lines inside faces (pose model + drawn-face model), so eyes and mouths stay sharp.
+E.update(linesrc='', ls_face=1, ls_gain=1.0)
+_contour0 = LP._contour
+_LSRC = {}
+def _src_map(img, name):
+    from PIL import Image
+    import controlnet_aux as C
+    if name not in _LSRC:
+        rep = 'lllyasviel/Annotators'
+        _LSRC[name] = {'hed': lambda: C.HEDdetector.from_pretrained(rep), 'pidi': lambda: C.PidiNetDetector.from_pretrained(rep),
+                       'coarse': lambda: C.LineartDetector.from_pretrained(rep),
+                       'teed': lambda: C.TEEDdetector.from_pretrained('fal-ai/teed', filename='5_model.pth')}[name]()
+    d = _LSRC[name]; pim = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)); R = 768
+    out = d(pim, coarse=True, detect_resolution=R, image_resolution=R) if name == 'coarse' else d(pim, detect_resolution=R, image_resolution=R) if name != 'teed' else d(pim, detect_resolution=R)
+    a = np.asarray(out.convert('L'), np.float32) / 255
+    return cv2.resize(a, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_AREA)       # 1 = line (white lines)
+def _contour_src(img):
+    base = _contour0(img)
+    if not E['linesrc']: return base
+    src = LP.SRC.get('full', img)
+    m = cv2.resize(np.clip(_src_map(src, E['linesrc']) * E['ls_gain'], 0, 1), (img.shape[1], img.shape[0]), interpolation=cv2.INTER_AREA)
+    if E['ls_face']:
+        fc = cartoon_faces(src) > 0
+        try: fc |= LP._focus_map(src)[0] > 0
+        except Exception: pass
+        fc = cv2.resize(cv2.dilate(fc.astype(np.uint8), np.ones((9, 9), np.uint8)), (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        m = np.where(fc, np.maximum(m * 0.5, base), m)
+        getattr(HS, 'log', print)(f'line source {E["linesrc"]}, current model kept in faces ({100 * fc.mean():.0f}% of the picture)')
+    return m.astype(np.float32)
+LP._contour = _contour_src
+
+# ---------- recognition test (prune=<fraction of CLIP similarity kept>, e.g. 0.97) ----------
+# CLIPasso (Vinker et al. 2022) measures how recognisable a sketch is as the similarity of its CLIP image features to the
+# photo's. Here it decides which lines can go: after the style has picked its lines, each line is taken out in turn and
+# the drop in similarity measured; the lines that matter least go first, a tenth at a time, while the drawing keeps
+# at least <prune> of its starting similarity (and at most prune_max of the line goes).
+E.update(prune=0.0, prune_max=0.6)
+_CLIP = {}
+def _clip():
+    if 'm' not in _CLIP:
+        import open_clip, torch
+        torch.set_num_threads(max(1, os.cpu_count() or 1))
+        m, _, pre = open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai'); m.eval(); _CLIP.update(m=m, pre=pre)
+    return _CLIP['m'], _CLIP['pre']
+def _emb(imgs):
+    import torch
+    from PIL import Image
+    m, pre = _clip()
+    with torch.no_grad():
+        x = torch.stack([pre(Image.fromarray(cv2.cvtColor(i, cv2.COLOR_BGR2RGB) if i.ndim == 3 else cv2.cvtColor(i, cv2.COLOR_GRAY2RGB))) for i in imgs])
+        e = torch.cat([m.encode_image(x[k:k + 32]) for k in range(0, len(x), 32)]); return torch.nn.functional.normalize(e, dim=-1).numpy()
+def clip_prune(sel, W, H):
+    img = LP.SRC.get('img')
+    if img is None or len(sel) < 6: return sel
+    target = _emb([cv2.resize(img, (W, H))])[0]
+    def raster(keep):
+        c = np.full((H, W), 255, np.uint8)
+        for k_ in keep: cv2.polylines(c, [np.round(sel[k_][0]).astype(np.int32)], False, 0, max(2, W // 300))
+        return cv2.resize(c, (448, int(448 * H / W)), interpolation=cv2.INTER_AREA)
+    keep = list(range(len(sel))); L = {k: LP.arclen(sel[k][0]) for k in keep}; tot = sum(L.values())
+    s0 = float(_emb([raster(keep)])[0] @ target); cur = s0
+    for _ in range(10):
+        if sum(L[k] for k in keep) <= (1 - E['prune_max']) * tot: break
+        sims = _emb([raster([j for j in keep if j != k]) for k in keep]) @ target       # similarity without each line
+        loss = {k: (cur - float(v)) / max(L[k], 1.0) for k, v in zip(keep, sims)}       # cost per pixel of line removed
+        order_ = sorted(keep, key=lambda k: loss[k]); drop = order_[:max(1, len(keep) // 10)]
+        trial = [k for k in keep if k not in drop]; s1 = float(_emb([raster(trial)])[0] @ target)
+        if s1 < E['prune'] * s0: break
+        keep, cur = trial, s1
+    getattr(HS, 'log', print)(f'recognition test: kept {len(keep)} of {len(sel)} lines, {100 * sum(L[k] for k in keep) / tot:.0f}% of the line, similarity {s0:.3f} -> {cur:.3f}')
+    return [sel[k] for k in keep]
+_order0 = HS.order
+def _order_pruned(keep):
+    if E['prune'] and keep:
+        W, H = RT.CTX.get('W'), RT.CTX.get('H')
+        if not W:
+            im = LP.SRC.get('img'); H, W = im.shape[:2]
+        keep = clip_prune(keep, W, H)
+    return _order0(keep)
+HS.order = _order_pruned
+
 def darkness_widths(photo, outdir):
     W = 900; ph = cv2.imread(photo); H = int(ph.shape[0] * W / ph.shape[1])
     g = cv2.cvtColor(cv2.resize(ph, (W, H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
