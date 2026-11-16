@@ -1,0 +1,40 @@
+# Test a style change on real jobs before it becomes an option: tools/compare.py traces each job's photo with the base
+# options and with the same options plus the extra keys, and puts the stills side by side. The sheets hold other
+# people's pictures, so they are uploaded encrypted (LS_KEY) to release "compare" only.
+# Planned: setup ~1-4 min, 2 jobs per runner x 4 options ~40 s each job. Limit 20 min.
+name: compare
+run-name: compare ${{ inputs.extra }}
+on:
+  workflow_dispatch:
+    inputs:
+      jobs: { description: "job ids, comma separated (2 per runner)", required: true }
+      bases: { description: "base option ids", default: "k,t" }
+      extra: { description: "extra style keys for the variant", default: "budget=1" }
+permissions: { contents: write }
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs: { groups: "${{ steps.g.outputs.groups }}" }
+    steps:
+      - id: g
+        run: echo "groups=$(python3 -c "import json;j='${{ inputs.jobs }}'.split(',');print(json.dumps([','.join(j[i:i+2]) for i in range(0,len(j),2)]))")" >> "$GITHUB_OUTPUT"
+  run:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy: { fail-fast: false, matrix: { group: "${{ fromJSON(needs.plan.outputs.groups) }}" } }
+    env: { GH_TOKEN: "${{ github.token }}", LS_KEY: "${{ secrets.LS_KEY }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with: { models: "true" }
+      - name: trace and compare
+        run: |
+          gh release view compare > /dev/null 2>&1 || gh release create compare --title compare --notes "encrypted comparison sheets" > /dev/null
+          for j in $(echo "${{ matrix.group }}" | tr ',' ' '); do
+            gh release download "job-$j" -p photo.jpg.enc -D "in_$j"
+            ~/venv/bin/python -u tools/compare.py "in_$j/photo.jpg.enc" "work_$j" "compare_$j.jpg" "${{ inputs.bases }}" "${{ inputs.extra }}" 2>&1 | grep -E "budget|wrote|Error|error" || true
+            ~/venv/bin/python -c "import sys; sys.path.insert(0,'engine'); import studio; studio.upload_private('compare', ['compare_$j.jpg'])"
+            git checkout engine/options.json
+          done

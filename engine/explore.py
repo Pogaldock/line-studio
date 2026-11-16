@@ -332,6 +332,124 @@ def select_wobble(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
     return out
 HS.select = select_wobble
 
+# ---------- line budget per object (budget=1) ----------
+# Without it, detail goes wherever the picture has the most edges: hair, fur, fabric and sketch shading are hundreds of
+# strong little edges, so they win line over a gift box or a hand, whose few clean edges are what make them read.
+# With it, the drawing's line is shared out by importance, the way abstraction by importance works in the literature
+# (DeCarlo & Santella 2002: detail where people look; CLIPascene, Vinker et al. 2023: subject and background
+# simplified separately):
+#   regions: face (pose model faces + anime/cartoon faces), hands, each object FastSAM finds, the rest of the subject,
+#            and the background (scene lines; they join the same pool instead of the separate longest-lines pass)
+#   shares:  face b_face, hands b_hand, background at most b_bg; every other region in proportion to the square root
+#            of its area, at least b_min each; a region that runs out of lines hands its share on to the others
+#   inside a region, lines are taken best first: lines along the region's own outline first (so each object reads),
+#            then long smooth lines; texture (lines that turn a lot, or sit in a crowd of other lines) last
+# The style's length search still sets the total: allowed line = (all candidate line) / 2 / lscale.
+E.update(budget=0, b_face=0.35, b_hand=0.10, b_bg=0.10, b_min=0.05, b_cand=0.45, b_turn=0.25, b_tex=2.0, b_crowd=1.0, b_edge=1.5)
+_BUD = {}
+_CHAIN = []
+_chain0 = HS.chain_strokes
+def _chain_rec(strokes, gap_max=6):
+    out = _chain0(strokes, gap_max); _CHAIN.append(out); return out
+HS.chain_strokes = _chain_rec
+_scene0 = HS.scene_lines
+HS.scene_lines = lambda *a, **k: [] if E['budget'] else _scene0(*a, **k)   # in budget mode the scene is in the pool
+
+def cartoon_faces(img):
+    # anime / cartoon faces (lbpcascade_animeface, nagadomi, MIT): the pose model only finds real people
+    if 'anime' not in _BUD:
+        f = os.path.join(HERE, 'models', 'lbpcascade_animeface.xml'); _BUD['anime'] = cv2.CascadeClassifier(f) if os.path.exists(f) else None
+    m = np.zeros(img.shape[:2], np.uint8)
+    if _BUD['anime'] is None or _BUD['anime'].empty(): return m
+    g = cv2.equalizeHist(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)); mn = int(0.08 * min(img.shape[:2]))
+    for x, y, w, h in _BUD['anime'].detectMultiScale(g, 1.1, 5, minSize=(mn, mn)):
+        cv2.ellipse(m, (int(x + w / 2), int(y + h * 0.55)), (int(w * 0.55), int(h * 0.6)), 0, 0, 360, 1, -1)
+    return m
+
+def regions(W, H, inside, face, labels):
+    key = (W, H, id(labels))
+    if _BUD.get('rkey') == key: return _BUD['reg']
+    img = LP.SRC.get('img'); img = cv2.resize(img, (W, H)) if img is not None and img.shape[:2] != (H, W) else img
+    fh = LP._cache('facehand2', img, LP._focus_map) if img is not None else None
+    fc = (face > 0) | (cv2.resize(cartoon_faces(img), (W, H), interpolation=cv2.INTER_NEAREST) > 0 if img is not None else False)
+    hd = (cv2.resize(fh[1], (W, H), interpolation=cv2.INTER_NEAREST) > 0) & ~fc if fh is not None else np.zeros((H, W), bool)
+    R = np.full((H, W), -1, np.int32)                          # -1 subject rest, -2 background, 0 face, 1 hands, 10+ objects
+    R[~inside] = -2
+    if labels is not None:
+        lab = cv2.resize(labels.astype(np.int32), (W, H), interpolation=cv2.INTER_NEAREST) if labels.shape != (H, W) else labels
+        R = np.where(lab > 0, lab + 9, R)
+    R[hd] = 1; R[fc] = 0
+    log_ = getattr(HS, 'log', print)
+    log_('budget regions: face', round(100 * fc.mean(), 1), '% | hands', round(100 * hd.mean(), 1), '% | objects', len([r for r in np.unique(R) if r >= 10]))
+    _BUD['rkey'], _BUD['reg'] = key, R; return R
+
+_sel_before_budget = HS.select
+def select_budget(strokes, level, U, W, H, inside, face, labels, lscale=1.0):
+    if not E['budget']: return _sel_before_budget(strokes, level, U, W, H, inside, face, labels, lscale)
+    key = (id(strokes), level, W, H)
+    if _BUD.get('ckey') != key:                                # candidates once per level: the length search reuses them
+        R = regions(W, H, inside, face, labels)
+        cand = _sel_before_budget(strokes, level, U, W, H, inside, face, labels, E['b_cand'])
+        k_ = next((i for i, c in enumerate(_CHAIN) if c is strokes), None)
+        scene = _CHAIN[k_ + 1] if HS.A['scene'] and k_ is not None and k_ + 1 < len(_CHAIN) else []
+        smin = HS.A['Lmin'] * U * level * E['b_cand'] * 1.5
+        for s_ in scene:                                       # background lines join the pool (subject ones are already in)
+            ix = np.clip(np.round(s_).astype(int), 0, [W - 1, H - 1])
+            if inside[ix[:, 1], ix[:, 0]].mean() > 0.3 or LP.arclen(s_) < smin: continue
+            cand.append((HS.flow(s_, HS.A['flow'] * level * 1.5), -1))
+        ink = np.zeros((H, W), np.float32)
+        for c_, _ in cand: cv2.polylines(ink, [np.round(c_).astype(np.int32)], False, 1.0, 1)
+        crowd = cv2.GaussianBlur(ink, (0, 0), 0.015 * W); crowd /= (np.median(crowd[ink > 0]) + 1e-6) if (ink > 0).any() else 1
+        edge = {}
+        for r in np.unique(R):                                 # each region's own outline
+            m = (R == r).astype(np.uint8); b = m - cv2.erode(m, np.ones((3, 3), np.uint8))
+            edge[r] = cv2.distanceTransform(1 - b, cv2.DIST_L2, 3) < 0.008 * W
+        items = []
+        for c_, obj in cand:
+            ix = np.clip(np.round(c_).astype(int), 0, [W - 1, H - 1]); rr = R[ix[:, 1], ix[:, 0]]
+            r = int(np.bincount(rr + 2).argmax() - 2); L = LP.arclen(c_)
+            on_edge = float(edge[r][ix[:, 1], ix[:, 0]].mean()); tex = max(0.0, turning(c_) - E['b_turn'])
+            score = L ** 0.7 * (1 + E['b_edge'] * on_edge) / (1 + E['b_tex'] * tex) / (1 + E['b_crowd'] * max(0.0, float(crowd[ix[:, 1], ix[:, 0]].mean()) - 1))
+            items.append((r, score, L, c_, obj))
+        area = {r: float((R == r).mean()) for r in np.unique(R)}
+        _BUD.update(ckey=key, items=items, area=area, total=sum(i[2] for i in items))
+        log_ = getattr(HS, 'log', print)
+        log_(f'budget level {level}: {len(items)} candidate lines in {len(area)} regions')
+    items, area = _BUD['items'], _BUD['area']
+    allowed = _BUD['total'] / 2.0 / lscale
+    have = {}
+    for r, _, L, _, _ in items: have[r] = have.get(r, 0.0) + L
+    rs = [r for r in have]
+    w = {}
+    for r in rs:
+        if r == 0: w[r] = E['b_face']
+        elif r == 1: w[r] = E['b_hand']
+        else: w[r] = None
+    free = 1.0 - sum(v for v in w.values() if v is not None)
+    rest = [r for r in rs if w[r] is None]
+    sq = {r: math.sqrt(area.get(r, 0.0)) for r in rest}; tot = sum(sq.values()) or 1.0
+    for r in rest: w[r] = max(E['b_min'], free * sq[r] / tot)
+    if -2 in w: w[-2] = min(w[-2], E['b_bg'])
+    z = sum(w.values()) or 1.0; w = {r: v / z for r, v in w.items()}
+    share = {r: 0.0 for r in rs}; left = allowed; open_ = set(rs)
+    for _ in range(6):                                         # water-filling: full regions hand their share on
+        if left <= 1e-6 or not open_: break
+        zz = sum(w[r] for r in open_)
+        for r in list(open_):
+            add = left * w[r] / zz; share[r] += add
+        left = 0.0
+        for r in list(open_):
+            if share[r] >= have[r]: left += share[r] - have[r]; share[r] = have[r]; open_.discard(r)
+    keep = []
+    for r in rs:
+        got = 0.0
+        for _, sc, L, c_, obj in sorted([i for i in items if i[0] == r], key=lambda t: -t[1]):
+            if got >= share[r]: break
+            if got + L > share[r] * 1.3 and got > 0: continue
+            keep.append((c_, obj)); got += L
+    return keep
+HS.select = select_budget
+
 def darkness_widths(photo, outdir):
     W = 900; ph = cv2.imread(photo); H = int(ph.shape[0] * W / ph.shape[1])
     g = cv2.cvtColor(cv2.resize(ph, (W, H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
